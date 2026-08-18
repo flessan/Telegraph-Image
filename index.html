@@ -1,680 +1,244 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="description" content="免费图床，基于 Cloudflare Pages 的图片上传工具">
-<link rel="icon" type="image/x-icon" href="/favicon.ico">
-<title>Telegraph-Image | 免费图床</title>
-<style>
-/* Design tokens carried over from the original Nuxt homepage so the look stays
-   continuous: #0297f8 pill buttons, #5e6878 body copy, a white card with the
-   bg.svg crest and the same soft double shadow, over a wallpaper backdrop with
-   a 240deg tint. */
-:root {
-  --accent: #0297f8;
-  --accent-soft: rgba(2, 151, 248, .1);
-  --ink: #3d4a5c;
-  --body: #5e6878;
-  --muted: #9aa5b4;
-  --line: #eef1f4;
-  --ok: #1bc1a1;
-  --err: #e5484d;
-  --card-shadow: 0 0 32px 0 rgba(12, 12, 13, .1), 0 2px 16px 0 rgba(12, 12, 13, .05);
-}
-* { box-sizing: border-box; }
-html, body { height: 100%; }
-body {
-  margin: 0;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
-    "Hiragino Sans GB", "Microsoft YaHei", "Source Han Sans SC", sans-serif;
-  color: var(--body);
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  /* Fallback gradient shows immediately and stays put if the wallpaper request
-     fails, so the page is never a flat white screen. */
-  background: linear-gradient(160deg, #1b2440 0%, #35406b 45%, #6f5878 75%, #b3766a 100%);
-}
-
-/* ---- wallpaper slideshow (cross-fading, mirrors the original 30s cycle) ---- */
-#backdrop { position: fixed; inset: 0; z-index: -2; overflow: hidden; }
-#backdrop figure {
-  position: absolute; inset: 0; margin: 0;
-  background-size: cover; background-position: center; background-repeat: no-repeat;
-  opacity: 0; will-change: opacity;
-  animation: wallpaper 30s linear infinite;
-  backface-visibility: hidden;
-}
-@keyframes wallpaper {
-  0%   { opacity: 0 }
-  3%   { opacity: 1 }
-  20%  { opacity: 1 }
-  28%  { opacity: 0 }
-  100% { opacity: 0 }
-}
-#tint {
-  position: fixed; inset: 0; z-index: -1; pointer-events: none;
-  background: linear-gradient(240deg, rgba(150, 50, 50, .3), rgba(0, 0, 200, 0));
-}
-@media (prefers-reduced-motion: reduce) {
-  #backdrop figure { animation: none; }
-  #backdrop figure:first-child { opacity: 1; }
-}
-
-/* ---- page frame ---- */
-.page { min-height: 100vh; display: flex; flex-direction: column; padding: 30px; }
-.topbar { display: flex; justify-content: flex-end; align-items: center; gap: 4px; }
-.topbar a {
-  display: inline-flex; align-items: center; gap: 6px;
-  color: #fff; text-decoration: none; font-size: 12px; font-weight: 500;
-  padding: 6px 11px; border-radius: 40px;
-  background: rgba(255, 255, 255, .1);
-  border: 1px solid rgba(255, 255, 255, .16);
-  backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
-  transition: background .18s, border-color .18s, transform .18s;
-}
-.topbar a:hover { background: rgba(255, 255, 255, .2); border-color: rgba(255, 255, 255, .3); }
-.topbar a:active { transform: translateY(1px); }
-.icon { width: 14px; height: 14px; flex: none; display: block; }
-.brand {
-  color: #fff; text-align: center; font-size: 23px; font-weight: 800;
-  letter-spacing: .4px; padding: 26px 0 14px; margin: 0;
-  text-shadow: 0 1px 14px rgba(0, 0, 0, .28);
-}
-.main { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; }
-footer { text-align: center; font-size: 12px; color: rgba(255, 255, 255, .85); padding-top: 26px; }
-footer a { color: #fff; font-weight: 700; text-decoration: none; }
-footer a:hover { opacity: .75; }
-
-/* ---- shared card chrome ---- */
-.card {
-  background: #fff;
-  border-radius: 3px;
-  box-shadow: var(--card-shadow);
-  font-size: 14px;
-}
-.board { display: flex; gap: 22px; align-items: stretch; width: 100%; max-width: 760px; }
-
-/* ---- left: upload ---- */
-.uploader {
-  width: 314px; flex: none;
-  background: #fff url(/bg.svg) top / 110% no-repeat;
-  cursor: pointer;
-  transition: box-shadow .2s;
-}
-.uploader:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.uploader .inner {
-  height: 100%; min-height: 370px; padding: 30px 24px;
-  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px;
-}
-.ring {
-  width: 80px; height: 80px; border-radius: 50%; border: 4px solid #c7cfd7;
-  display: flex; align-items: center; justify-content: center; position: relative; flex: none;
-  transition: border-color .2s;
-}
-.ring svg { width: 42px; height: 42px; }
-.ring::before {
-  content: ''; position: absolute; inset: -5px; border-radius: 50%;
-  border: 1px solid rgba(199, 207, 215, .5);
-  animation: halo 1.8s ease-out infinite;
-}
-@keyframes halo {
-  0%   { transform: scale(1); opacity: .9 }
-  100% { transform: scale(1.34); opacity: 0 }
-}
-.uploader.dragover .ring { border-color: var(--accent); }
-.uploader.dragover { box-shadow: 0 0 0 2px var(--accent), var(--card-shadow); }
-.hint { text-align: center; font-size: 12px; line-height: 1.8; }
-.hint b { display: block; color: var(--ink); font-size: 14px; font-weight: 700; margin-bottom: 4px; }
-.btn {
-  display: inline-flex; align-items: center; justify-content: center; gap: 7px;
-  border: 0; border-radius: 40px; background: var(--accent); color: #fff;
-  font: 700 13px/1 inherit; font-family: inherit; padding: 10px 24px; cursor: pointer;
-  box-shadow: 0 1px 2px rgba(2, 96, 160, .18), 0 4px 12px rgba(2, 151, 248, .22);
-  transition: background-color .16s, transform .12s, box-shadow .16s;
-}
-.btn:hover { background: #1ea3fa; box-shadow: 0 2px 4px rgba(2, 96, 160, .2), 0 6px 18px rgba(2, 151, 248, .3); }
-.btn:active { transform: translateY(1px); box-shadow: 0 1px 2px rgba(2, 96, 160, .2); }
-.btn.ghost {
-  background: transparent; color: #7c8899; box-shadow: none;
-  border: 1px solid #e0e5ea;
-}
-.btn.ghost:hover { background: #f7f9fb; border-color: #cfd6de; color: var(--ink); box-shadow: none; }
-.btn.small { padding: 7px 14px; font-size: 12px; gap: 6px; }
-.btn .icon { width: 13px; height: 13px; }
-#file-input { display: none; }
-
-/* ---- right: results ---- */
-.results { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-.results .head {
-  padding: 12px 14px; border-bottom: 1px solid var(--line);
-  display: flex; align-items: center; justify-content: space-between; flex: none;
-}
-.results .head h2 {
-  margin: 0; font-size: 12px; font-weight: 700; color: var(--ink);
-  letter-spacing: .3px; display: inline-flex; align-items: center; gap: 7px;
-}
-.results .head h2 .icon { width: 13px; height: 13px; color: var(--muted); }
-.results .head .count { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
-#queue {
-  flex: 1; overflow-y: auto; padding: 12px 14px;
-  display: flex; flex-direction: column; gap: 6px; min-height: 150px; max-height: 260px;
-}
-#queue:empty::after {
-  content: '上传的文件会显示在这里';
-  margin: auto; font-size: 12px; color: var(--muted);
-}
-.item {
-  display: flex; align-items: center; gap: 10px;
-  padding: 6px 8px; border-radius: 7px; transition: background .15s;
-}
-.item:hover { background: #f7f9fb; }
-.item .thumb {
-  width: 32px; height: 32px; border-radius: 5px; flex: none; object-fit: cover;
-  box-shadow: 0 0 0 1px rgba(12, 12, 13, .06);
-  background: #f1f3f6; display: flex; align-items: center; justify-content: center;
-  font-size: 15px; overflow: hidden;
-}
-.item .info { flex: 1; min-width: 0; }
-.item .name {
-  font-size: 12px; font-weight: 600; color: var(--ink);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-.item .meta { font-size: 11px; color: var(--muted); margin-top: 2px; }
-.item .meta.error { color: var(--err); }
-.progress {
-  height: 3px; border-radius: 2px; background: var(--line); overflow: hidden; margin-top: 5px;
-  transition: height .3s, margin-top .3s, opacity .25s;
-}
-.progress i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .15s; }
-.item.done .progress { height: 0; margin-top: 0; opacity: 0; }
-.item.error .progress i { background: var(--err); }
-.item .state { display: inline-flex; align-items: center; gap: 4px; }
-.item .state .icon { width: 11px; height: 11px; color: var(--ok); }
-.item .copy-one {
-  flex: none; width: 26px; height: 26px; padding: 0; border: 0; cursor: pointer;
-  display: inline-flex; align-items: center; justify-content: center;
-  border-radius: 7px; background: transparent; color: var(--muted);
-  opacity: 0; transition: opacity .15s, background .15s, color .15s;
-}
-.item:hover .copy-one, .item .copy-one:focus-visible { opacity: 1; }
-.item .copy-one:hover { background: var(--accent-soft); color: var(--accent); }
-.item .copy-one .icon { width: 14px; height: 14px; }
-@media (hover: none) { .item .copy-one { opacity: 1; } }
-.out { border-top: 1px solid var(--line); padding: 11px 14px; flex: none; }
-/* Segmented control reads tighter than four separate pills. */
-.tabs {
-  display: inline-flex; gap: 2px; margin-bottom: 9px; padding: 2px;
-  background: #f4f6f8; border-radius: 8px;
-}
-.tabs button {
-  border: 0; background: transparent; color: #7c8899; border-radius: 6px;
-  padding: 5px 11px; font: 600 11px inherit; font-family: inherit; cursor: pointer;
-  transition: background .15s, color .15s, box-shadow .15s;
-}
-.tabs button:hover { color: var(--ink); }
-.tabs button.active {
-  background: #fff; color: var(--accent);
-  box-shadow: 0 1px 2px rgba(12, 12, 13, .08);
-}
-#link-output {
-  /* One entry per line (ids are long) so rows map 1:1 to links; overflow scrolls. */
-  white-space: pre; overflow: auto;
-  width: 100%; height: 72px; max-height: 180px; resize: vertical; padding: 8px;
-  border: 1px solid #e4e8ed; border-radius: 4px; color: var(--body);
-  font: 11px/1.7 ui-monospace, SFMono-Regular, Consolas, monospace;
-}
-#link-output:focus { outline: none; border-color: rgba(2, 151, 248, .5); }
-.actions { display: flex; justify-content: flex-end; gap: 7px; margin-top: 9px; }
-
-/* ---- setup notice ---- */
-#setup-notice { display: none; width: 100%; max-width: 760px; margin-bottom: 18px; }
-#setup-notice .problem {
-  border-radius: 3px; padding: 12px 14px; margin-bottom: 8px;
-  font-size: 12px; line-height: 1.7; border-left: 3px solid;
-  background: #fff; box-shadow: var(--card-shadow);
-}
-#setup-notice .problem b { display: block; font-weight: 700; margin-bottom: 2px; }
-#setup-notice .problem.error { border-left-color: var(--err); color: #a8323a; }
-#setup-notice .problem.warning { border-left-color: #f5a524; color: #94620f; }
-#setup-notice .problem.info { border-left-color: var(--accent); color: #0b6ba8; }
-
-/* ---- toast ---- */
-#toast {
-  position: fixed; left: 50%; bottom: 34px; transform: translateX(-50%) translateY(18px);
-  background: rgba(24, 30, 42, .94); color: #fff; padding: 10px 20px; border-radius: 40px;
-  font-size: 13px; opacity: 0; pointer-events: none; z-index: 10;
-  transition: opacity .2s, transform .2s;
-}
-#toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
-
-/* ---- narrow screens: stack the two columns ---- */
-@media (max-width: 760px) {
-  .page { padding: 20px 16px; }
-  .brand { font-size: 22px; padding: 20px 0 10px; }
-  .board { flex-direction: column; max-width: 420px; }
-  .uploader { width: 100%; }
-  .uploader .inner { min-height: 0; padding: 26px 20px; }
-  #queue { max-height: 200px; }
-}
-</style>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="Telegraph-Image object workspace — stage files locally, then push them to storage.">
+  <meta name="color-scheme" content="light dark">
+  <link rel="icon" type="image/x-icon" href="/favicon.ico">
+  <title>Telegraph-Image</title>
+  <link rel="stylesheet" href="/css/workspace.css">
 </head>
 <body>
-<div id="backdrop" aria-hidden="true"></div>
-<div id="tint" aria-hidden="true"></div>
+  <a class="skip-link" href="#browser" data-i18n="skipToContent">Skip to files</a>
 
-<div class="page">
-  <nav class="topbar">
-    <a id="admin-link" href="/admin.html"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7.5" height="7.5" rx="1.6"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.6"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.6"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.6"/></svg><span>管理后台</span></a>
-    <a href="https://github.com/cf-pages/Telegraph-Image" target="_blank" rel="noopener"><svg class="icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5A11.5 11.5 0 0 0 .5 12a11.5 11.5 0 0 0 7.86 10.92c.58.1.79-.25.79-.55v-2.1c-3.2.7-3.88-1.4-3.88-1.4-.53-1.34-1.29-1.7-1.29-1.7-1.05-.72.08-.7.08-.7 1.16.08 1.77 1.2 1.77 1.2 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.23-1.28-5.23-5.7 0-1.26.45-2.29 1.19-3.1-.12-.29-.52-1.46.11-3.05 0 0 .96-.3 3.15 1.18a10.9 10.9 0 0 1 5.74 0c2.18-1.48 3.14-1.18 3.14-1.18.63 1.59.23 2.76.12 3.05.74.81 1.18 1.84 1.18 3.1 0 4.43-2.69 5.4-5.25 5.69.41.36.78 1.06.78 2.14v3.17c0 .3.2.66.79.55A11.5 11.5 0 0 0 23.5 12A11.5 11.5 0 0 0 12 .5"/></svg><span>GitHub</span></a>
-  </nav>
+  <div class="app" id="app">
+    <header class="app-header">
+      <a class="brand" href="/" id="brand-link">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3.5" y="8.5" width="13" height="12" rx="2"/>
+            <path d="M7.5 8.5V6.2A2.2 2.2 0 0 1 9.7 4h10.1A1.7 1.7 0 0 1 21.5 5.7v10.6a2.2 2.2 0 0 1-2.2 2.2H16.5"/>
+          </svg>
+        </span>
+        <span class="brand-text">
+          <span class="brand-name" id="site-name">Telegraph-Image</span>
+          <span class="brand-tag" data-i18n="appTagline">Object workspace</span>
+        </span>
+      </a>
 
-  <h1 class="brand" id="site-name">Telegraph-Image</h1>
-
-  <div class="main">
-    <div id="setup-notice" role="status" aria-live="polite"></div>
-
-    <div class="board">
-      <div class="card uploader" id="dropzone" role="button" tabindex="0" aria-label="选择、拖拽或粘贴文件上传">
-        <div class="inner">
-          <div class="ring">
-            <svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-              <path d="M422.4 704l-94.72-143.36c-15.36-23.04-46.08-30.72-71.68-15.36l-15.36 15.36-130.56 204.8c-12.8 25.6-7.68 56.32 17.92 71.68 7.68 5.12 17.92 7.68 25.6 7.68h256c28.16 0 51.2-23.04 51.2-51.2 0-7.68-2.56-15.36-5.12-23.04l-33.28-66.56z" fill="#A5C8F4"/>
-              <path d="M307.2 358.4c-43.52 0-76.8-33.28-76.8-76.8s33.28-76.8 76.8-76.8 76.8 33.28 76.8 76.8-33.28 76.8-76.8 76.8z m327.68-33.28c5.12-7.68 12.8-15.36 20.48-17.92 25.6-12.8 56.32 0 69.12 23.04L944.64 793.6c2.56 7.68 5.12 15.36 5.12 23.04 0 28.16-23.04 51.2-51.2 51.2H378.88c-10.24 0-20.48-2.56-30.72-10.24-23.04-15.36-28.16-48.64-12.8-71.68l56.32-79.36 243.2-381.44z" fill="#2589FF"/>
-            </svg>
-          </div>
-          <p class="hint"><b>点击、拖拽或粘贴上传</b>支持批量上传<br>图片 / 视频 / 音频 / 文档</p>
-          <button class="btn" type="button" id="pick"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 16.5V4.5m0 0L7.25 9.25M12 4.5l4.75 4.75M4 16.5v2.25A1.75 1.75 0 0 0 5.75 20.5h12.5A1.75 1.75 0 0 0 20 18.75V16.5"/></svg><span>选择上传文件</span></button>
-        </div>
+      <div class="search" id="search-wrap">
+        <span class="search-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="11" cy="11" r="6.25"/><path d="M16 16l4 4"/></svg>
+        </span>
+        <input id="search" class="search-field" type="search" autocomplete="off" spellcheck="false" data-i18n-placeholder="searchPlaceholder" data-i18n-aria="searchAria" placeholder="Search files">
+        <button type="button" class="search-clear" id="search-clear" hidden data-i18n-aria="clearSearch" title="">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
       </div>
-      <input id="file-input" type="file" multiple>
 
-      <div class="card results">
-        <div class="head">
-          <h2><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8.5 6.5h12M8.5 12h12M8.5 17.5h12M3.75 6.5h.01M3.75 12h.01M3.75 17.5h.01"/></svg>上传结果</h2>
-          <span class="count" id="file-count"></span>
+      <div class="header-actions" role="toolbar" data-i18n-aria="utilities">
+        <button type="button" class="icon-btn mobile-search-toggle" id="mobile-search-toggle" data-i18n-aria="searchAria">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="11" cy="11" r="6.25"/><path d="M16 16l4 4"/></svg>
+        </button>
+        <button type="button" class="icon-btn hide-phone" id="refresh-btn" data-i18n-aria="refreshAria" data-i18n-title="refresh">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 1 1-2.2-5.5"/><path d="M20 4v5h-5"/></svg>
+        </button>
+        <button type="button" class="icon-btn" id="theme-btn" data-i18n-aria="themeToggleAria" aria-pressed="false">
+          <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 3v2M12 19v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M3 12h2M19 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+        </button>
+        <button type="button" class="icon-btn hide-phone" id="lang-btn" data-i18n-aria="languageAria" data-i18n-title="language">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.6 3 3.9 6 3.9 9s-1.3 6-3.9 9c-2.6-3-3.9-6-3.9-9S9.4 6 12 3z"/></svg>
+        </button>
+        <a class="icon-btn with-label" id="admin-link" href="/admin.html" data-i18n-aria="dashboardAria">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="3.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.5"/></svg>
+          <span class="btn-label" data-i18n="dashboard">Dashboard</span>
+        </a>
+        <a class="icon-btn hide-phone" href="https://github.com/cf-pages/Telegraph-Image" target="_blank" rel="noopener" data-i18n-aria="githubAria" data-i18n-title="github">
+          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5A11.5 11.5 0 0 0 .5 12a11.5 11.5 0 0 0 7.86 10.92c.58.1.79-.25.79-.55v-2.1c-3.2.7-3.88-1.4-3.88-1.4-.53-1.34-1.29-1.7-1.29-1.7-1.05-.72.08-.7.08-.7 1.16.08 1.77 1.2 1.77 1.2 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.23-1.28-5.23-5.7 0-1.26.45-2.29 1.19-3.1-.12-.29-.52-1.46.11-3.05 0 0 .96-.3 3.15 1.18a10.9 10.9 0 0 1 5.74 0c2.18-1.48 3.14-1.18 3.14-1.18.63 1.59.23 2.76.12 3.05.74.81 1.18 1.84 1.18 3.1 0 4.43-2.69 5.4-5.25 5.69.41.36.78 1.06.78 2.14v3.17c0 .3.2.66.79.55A11.5 11.5 0 0 0 23.5 12A11.5 11.5 0 0 0 12 .5"/></svg>
+        </a>
+        <button type="button" class="icon-btn" id="overflow-btn" data-i18n-aria="moreActions">
+          <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="6" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="18" cy="12" r="1.6"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <div class="shell">
+      <aside class="sidebar" aria-label="Workspace">
+        <nav class="side-nav" data-i18n-aria="navAria">
+          <button type="button" class="nav-item" data-view="files" aria-current="page">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M4 7.5A2.5 2.5 0 0 1 6.5 5H10l2 2h5.5A2.5 2.5 0 0 1 20 9.5v8A2.5 2.5 0 0 1 17.5 20h-11A2.5 2.5 0 0 1 4 17.5v-10z"/></svg>
+            <span data-i18n="navFiles">Files</span>
+          </button>
+          <button type="button" class="nav-item" data-view="images">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="17" height="14" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M3.8 16.5l4.4-4.2 3.1 3 2.4-2.3 6.3 5.3"/></svg>
+            <span data-i18n="navImages">Images</span>
+          </button>
+          <button type="button" class="nav-item" data-view="recent">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="8.25"/><path d="M12 8v4.4l2.8 1.6"/></svg>
+            <span data-i18n="navRecent">Recent</span>
+          </button>
+        </nav>
+        <div class="staging-card">
+          <h2 data-i18n="stagingTitle">Ready to send</h2>
+          <div class="staging-count" id="staging-count">0</div>
+          <p id="staging-copy" data-i18n="stagingEmpty">No pending changes</p>
         </div>
-        <div id="queue"></div>
-        <div class="out" id="results-card" hidden>
-          <div class="tabs" id="format-tabs">
-            <button type="button" data-format="url" class="active">URL</button>
-            <button type="button" data-format="markdown">Markdown</button>
-            <button type="button" data-format="bbcode">BBCode</button>
-            <button type="button" data-format="html">HTML</button>
+        <p class="sidebar-hint" data-i18n="sidebarHint">This browser keeps a local catalog. The public dashboard lists the full remote store when it is enabled.</p>
+      </aside>
+
+      <main class="workspace" id="dropzone">
+        <div class="toolbar">
+          <nav class="crumbs" aria-label="Breadcrumb">
+            <ol>
+              <li><span data-i18n="breadcrumbRoot">Storage</span><span class="sep" aria-hidden="true">/</span></li>
+              <li id="crumb-current" data-i18n="navFiles">Files</li>
+            </ol>
+            <span class="file-count" id="visible-count"></span>
+          </nav>
+          <div class="toolbar-actions">
+            <button type="button" class="btn tonal" id="add-files" data-i18n-aria="addFilesAria">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+              <span data-i18n="addFiles">Add files</span>
+            </button>
+            <button type="button" class="btn" id="push-changes" disabled data-i18n-aria="pushChangesAria">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4.5m0 0L7.4 9M12 4.5L16.6 9M5 16.5v2.2A1.8 1.8 0 0 0 6.8 20.5h10.4a1.8 1.8 0 0 0 1.8-1.8v-2.2"/></svg>
+              <span id="push-label" data-i18n="pushChanges">Push changes</span>
+            </button>
+            <div class="segmented" role="group">
+              <button type="button" id="view-grid" aria-pressed="true" data-i18n-aria="viewGridAria" data-i18n-title="viewGrid">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="4" y="4" width="7" height="7" rx="1.4"/><rect x="13" y="4" width="7" height="7" rx="1.4"/><rect x="4" y="13" width="7" height="7" rx="1.4"/><rect x="13" y="13" width="7" height="7" rx="1.4"/></svg>
+              </button>
+              <button type="button" id="view-list" aria-pressed="false" data-i18n-aria="viewListAria" data-i18n-title="viewList">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M8 7h12M8 12h12M8 17h12M4.2 7h.01M4.2 12h.01M4.2 17h.01"/></svg>
+              </button>
+            </div>
+            <label class="sr-only" for="sort-select" data-i18n="sortBy">Sort</label>
+            <select id="sort-select" class="select">
+              <option value="date:desc" data-i18n="sortDate">Date added</option>
+              <option value="name:asc" data-i18n="sortName">Name</option>
+              <option value="size:desc" data-i18n="sortSize">Size</option>
+            </select>
+          </div>
+        </div>
+
+        <div id="setup-notice" class="setup-stack" role="status" aria-live="polite"></div>
+        <div id="pending-bar" class="pending-bar" hidden>
+          <div class="grow">
+            <strong id="pending-title"></strong>
+            <span data-i18n="pendingHint">These files are only on this device.</span>
+          </div>
+          <button type="button" class="btn text" id="retry-failed" hidden data-i18n="retryFailed">Retry failed</button>
+        </div>
+
+        <div class="browser" id="browser" tabindex="-1">
+          <div id="file-stage"></div>
+        </div>
+
+        <section class="links-panel" id="results-card" hidden>
+          <div class="links-head">
+            <div>
+              <h2 data-i18n="linksTitle">Public links</h2>
+              <p data-i18n="linksHint">Copied from files already pushed in this workspace.</p>
+            </div>
+            <div class="segmented" id="format-tabs" role="tablist">
+              <button type="button" data-format="url" class="active" role="tab" aria-selected="true">URL</button>
+              <button type="button" data-format="markdown" role="tab" aria-selected="false">Markdown</button>
+              <button type="button" data-format="bbcode" role="tab" aria-selected="false">BBCode</button>
+              <button type="button" data-format="html" role="tab" aria-selected="false">HTML</button>
+            </div>
           </div>
           <textarea id="link-output" readonly spellcheck="false"></textarea>
-          <div class="actions">
-            <button type="button" class="btn ghost small" id="clear-all"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.75 6.75h16.5M9 6.75V5A1.5 1.5 0 0 1 10.5 3.5h3A1.5 1.5 0 0 1 15 5v1.75M5.75 6.75l.8 12.1A2 2 0 0 0 8.55 20.7h6.9a2 2 0 0 0 2-1.85l.8-12.1"/></svg><span>清空</span></button>
-            <button type="button" class="btn small" id="copy-all"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11.5" height="11.5" rx="2.2"/><path d="M5.5 15.5H5a1.5 1.5 0 0 1-1.5-1.5V5A1.5 1.5 0 0 1 5 3.5h9A1.5 1.5 0 0 1 15.5 5v.5"/></svg><span>复制全部</span></button>
+          <div class="toolbar-actions" style="margin-top:12px;justify-content:flex-end">
+            <button type="button" class="btn outlined" id="copy-all" data-i18n="copyAll">Copy all</button>
           </div>
+        </section>
+
+        <div class="drop-layer" aria-hidden="true">
+          <div>
+            <strong data-i18n="dropTitle">Drop files to add them</strong>
+            <span data-i18n="dropBody">They will stay on this device until you push changes.</span>
+          </div>
+        </div>
+      </main>
+    </div>
+
+    <footer class="status-bar">
+      <span id="status-files"></span>
+      <span id="status-pending"></span>
+      <span id="status-failed"></span>
+      <span id="status-synced"></span>
+      <span id="status-selection"></span>
+      <div class="push-meter" id="push-meter" hidden><i></i></div>
+    </footer>
+  </div>
+
+  <nav class="bottom-nav" data-i18n-aria="navAria">
+    <button type="button" data-view="files" aria-current="page">
+      <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 7.5A2.5 2.5 0 0 1 6.5 5H10l2 2h5.5A2.5 2.5 0 0 1 20 9.5v8A2.5 2.5 0 0 1 17.5 20h-11A2.5 2.5 0 0 1 4 17.5v-10z"/></svg></span>
+      <span data-i18n="navFiles">Files</span>
+    </button>
+    <button type="button" data-view="images">
+      <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3.5" y="5" width="17" height="14" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M3.8 16.5l4.4-4.2 3.1 3 2.4-2.3 6.3 5.3"/></svg></span>
+      <span data-i18n="navImages">Images</span>
+    </button>
+    <button type="button" data-view="recent">
+      <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="8.25"/><path d="M12 8v4.4l2.8 1.6"/></svg></span>
+      <span data-i18n="navRecent">Recent</span>
+    </button>
+  </nav>
+
+  <button type="button" class="fab" id="fab-add" data-i18n-aria="fabAdd">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+  </button>
+
+  <input id="file-input" type="file" multiple hidden>
+
+  <div class="overlay" id="overlay" hidden></div>
+
+  <div class="dialog" id="preview-dialog" role="dialog" aria-modal="true" aria-labelledby="preview-title" hidden>
+    <div class="dialog-head">
+      <h2 id="preview-title" data-i18n="previewTitle">File preview</h2>
+      <button type="button" class="icon-btn" id="preview-close" data-i18n-aria="previewClose">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+    <div class="preview-layout">
+      <div class="preview-stage" id="preview-stage"></div>
+      <div class="preview-meta">
+        <div class="meta-row"><dt data-i18n="metaFilename">Filename</dt><dd id="meta-name"></dd></div>
+        <div class="meta-row"><dt data-i18n="metaDimensions">Dimensions</dt><dd id="meta-dims"></dd></div>
+        <div class="meta-row"><dt data-i18n="metaMime">MIME type</dt><dd id="meta-mime"></dd></div>
+        <div class="meta-row"><dt data-i18n="metaSize">Size</dt><dd id="meta-size"></dd></div>
+        <div class="meta-row"><dt data-i18n="metaStatus">Status</dt><dd id="meta-status"></dd></div>
+        <div class="meta-row"><dt data-i18n="metaUrl">Public URL</dt><dd><input id="meta-url" readonly spellcheck="false"></dd></div>
+        <div class="preview-actions">
+          <button type="button" class="btn" id="preview-copy" data-i18n="copyOne">Copy URL</button>
+          <button type="button" class="btn outlined" id="preview-download" data-i18n="download">Download</button>
+          <button type="button" class="btn text" id="preview-retry" hidden data-i18n="retry">Retry</button>
         </div>
       </div>
     </div>
   </div>
 
-  <footer>
-    <span>基于 <a href="https://github.com/cf-pages/Telegraph-Image" target="_blank" rel="noopener">Telegraph-Image</a> · </span>
-    <a href="/index-nuxt.html">旧版界面</a>
-  </footer>
-</div>
-<div id="toast"></div>
+  <div class="dialog confirm" id="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-title" hidden>
+    <div class="dialog-head"><h2 id="confirm-title" data-i18n="confirmRemoveTitle">Remove from workspace?</h2></div>
+    <div class="dialog-body">
+      <p id="confirm-body"></p>
+      <div class="confirm-actions">
+        <button type="button" class="btn outlined" id="confirm-cancel" data-i18n="cancel">Cancel</button>
+        <button type="button" class="btn danger" id="confirm-ok" data-i18n="confirmRemove">Remove</button>
+      </div>
+    </div>
+  </div>
 
-<script>
-(function () {
-  'use strict';
+  <div class="menu" id="context-menu" role="menu" hidden></div>
+  <div class="menu" id="lang-menu" role="menu" hidden></div>
+  <div class="menu" id="overflow-menu" role="menu" hidden></div>
 
-  // Same icon as the toolbar copy button, reused for the per-row control.
-  var TICK_ICON = '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.5 12.5l5 5 10-11"/></svg>';
-  var COPY_ICON = '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11.5" height="11.5" rx="2.2"/><path d="M5.5 15.5H5a1.5 1.5 0 0 1-1.5-1.5V5A1.5 1.5 0 0 1 5 3.5h9A1.5 1.5 0 0 1 15.5 5v.5"/></svg>';
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <div id="live" class="sr-only" aria-live="polite" aria-atomic="true"></div>
 
-  var MAX_CONCURRENT = 3;
-  var uploaded = [];        // { url, fileName }
-  var activeUploads = 0;
-  var pending = [];
-  var currentFormat = 'url';
-
-  var dropzone = document.getElementById('dropzone');
-  var fileInput = document.getElementById('file-input');
-  var queue = document.getElementById('queue');
-  var resultsCard = document.getElementById('results-card');
-  var linkOutput = document.getElementById('link-output');
-  var fileCount = document.getElementById('file-count');
-  var toast = document.getElementById('toast');
-  var toastTimer = null;
-
-  // ---- wallpaper slideshow ----
-  // Mirrors the original homepage: five Bing pictures cross-fading on a 30s
-  // cycle, 6s apart. Any failure leaves the CSS gradient in place.
-  (function loadWallpapers() {
-    fetch('/api/bing/wallpaper').then(function (res) {
-      if (!res.ok) throw new Error('wallpaper unavailable');
-      return res.json();
-    }).then(function (payload) {
-      var images = (payload && payload.data) || [];
-      if (!images.length) return;
-      var backdrop = document.getElementById('backdrop');
-      images.slice(0, 5).forEach(function (image, index) {
-        if (!image || !image.url) return;
-        var figure = document.createElement('figure');
-        var url = /^https?:/.test(image.url) ? image.url : 'https://cn.bing.com' + image.url;
-        figure.style.backgroundImage = 'url("' + url.replace(/"/g, '%22') + '")';
-        figure.style.animationDelay = (index * 6) + 's';
-        backdrop.appendChild(figure);
-      });
-    }).catch(function () { /* gradient fallback already painted */ });
-  })();
-
-  // ---- site config (/api/config) ----
-  fetch('/api/config').then(function (res) {
-    if (!res.ok) throw new Error('config unavailable');
-    return res.json();
-  }).then(function (config) {
-    if (config.siteName) {
-      document.getElementById('site-name').textContent = config.siteName;
-    }
-    if (config.siteTitle) {
-      document.title = config.siteTitle;
-    }
-    // An explicit background replaces the slideshow entirely.
-    if (config.backgroundImage) {
-      var backdrop = document.getElementById('backdrop');
-      backdrop.textContent = '';
-      backdrop.style.backgroundImage = 'url("' + String(config.backgroundImage).replace(/"/g, '%22') + '")';
-      backdrop.style.backgroundSize = 'cover';
-      backdrop.style.backgroundPosition = 'center';
-    }
-    if (config.showAdminEntry === false) {
-      var adminLink = document.getElementById('admin-link');
-      if (adminLink) adminLink.remove();
-    }
-    renderSetupProblems(config.problems);
-  }).catch(function () { /* defaults already in markup */ });
-
-  // Show deployment problems (missing bindings/variables) instead of letting the
-  // first upload fail with an opaque error.
-  function renderSetupProblems(problems) {
-    if (!problems || !problems.length) return;
-    var box = document.getElementById('setup-notice');
-    var titles = { error: '需要处理', warning: '注意', info: '提示' };
-    problems.forEach(function (problem) {
-      var el = document.createElement('div');
-      el.className = 'problem ' + (problem.severity || 'info');
-      var label = document.createElement('b');
-      label.textContent = titles[problem.severity] || titles.info;
-      el.appendChild(label);
-      el.appendChild(document.createTextNode(problem.message));
-      box.appendChild(el);
-    });
-    box.style.display = 'block';
-  }
-
-  // ---- input wiring: click / drag / paste ----
-  dropzone.addEventListener('click', function () { fileInput.click(); });
-  dropzone.addEventListener('keydown', function (event) {
-    if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); fileInput.click(); }
-  });
-  document.getElementById('pick').addEventListener('click', function (event) {
-    event.stopPropagation();   // the card itself already opens the picker
-    fileInput.click();
-  });
-  fileInput.addEventListener('change', function () {
-    enqueueFiles(fileInput.files);
-    fileInput.value = '';
-  });
-
-  ['dragenter', 'dragover'].forEach(function (type) {
-    dropzone.addEventListener(type, function (event) {
-      event.preventDefault();
-      dropzone.classList.add('dragover');
-    });
-  });
-  ['dragleave', 'drop'].forEach(function (type) {
-    dropzone.addEventListener(type, function (event) {
-      event.preventDefault();
-      dropzone.classList.remove('dragover');
-    });
-  });
-  dropzone.addEventListener('drop', function (event) {
-    if (event.dataTransfer && event.dataTransfer.files.length) {
-      enqueueFiles(event.dataTransfer.files);
-    }
-  });
-
-  document.addEventListener('paste', function (event) {
-    if (!event.clipboardData) return;
-    var files = [];
-    for (var i = 0; i < event.clipboardData.items.length; i++) {
-      var item = event.clipboardData.items[i];
-      if (item.kind === 'file') {
-        var file = item.getAsFile();
-        if (file) files.push(file);
-      }
-    }
-    if (files.length) enqueueFiles(files);
-  });
-
-  // ---- upload queue ----
-  function enqueueFiles(fileList) {
-    Array.prototype.forEach.call(fileList, function (file) {
-      var item = createQueueItem(file);
-      pending.push({ file: file, item: item });
-    });
-    updateCount();
-    pumpQueue();
-  }
-
-  function pumpQueue() {
-    while (activeUploads < MAX_CONCURRENT && pending.length) {
-      var next = pending.shift();
-      activeUploads++;
-      uploadFile(next.file, next.item);
-    }
-  }
-
-  function updateCount() {
-    var total = queue.children.length;
-    fileCount.textContent = total ? '共 ' + total + ' 个文件' : '';
-  }
-
-  function createQueueItem(file) {
-    var item = document.createElement('div');
-    item.className = 'item';
-
-    var thumb;
-    if (file.type.indexOf('image/') === 0) {
-      thumb = document.createElement('img');
-      thumb.className = 'thumb';
-      thumb.alt = '';
-      thumb.src = URL.createObjectURL(file);
-      thumb.onload = function () { URL.revokeObjectURL(thumb.src); };
-    } else {
-      thumb = document.createElement('div');
-      thumb.className = 'thumb';
-      thumb.textContent = file.type.indexOf('video/') === 0 ? '🎬'
-        : file.type.indexOf('audio/') === 0 ? '🎵' : '📄';
-    }
-
-    var info = document.createElement('div');
-    info.className = 'info';
-    var name = document.createElement('div');
-    name.className = 'name';
-    name.textContent = file.name;
-    var meta = document.createElement('div');
-    meta.className = 'meta';
-    meta.textContent = formatSize(file.size) + ' · 等待上传…';
-    var progress = document.createElement('div');
-    progress.className = 'progress';
-    progress.appendChild(document.createElement('i'));
-    info.appendChild(name);
-    info.appendChild(meta);
-    info.appendChild(progress);
-
-    item.appendChild(thumb);
-    item.appendChild(info);
-    queue.appendChild(item);
-
-    return { root: item, meta: meta, bar: progress.firstChild };
-  }
-
-  function uploadFile(file, item) {
-    var formData = new FormData();
-    formData.append('file', file);
-
-    var xhr = new XMLHttpRequest();
-    xhr.open('POST', '/upload');
-
-    xhr.upload.onprogress = function (event) {
-      if (event.lengthComputable) {
-        var percent = Math.round(event.loaded / event.total * 100);
-        item.bar.style.width = percent + '%';
-        item.meta.textContent = formatSize(file.size) + ' · 上传中 ' + percent + '%';
-      }
-    };
-
-    xhr.onload = function () {
-      var src = null;
-      var errorMessage = null;
-      try {
-        var data = JSON.parse(xhr.responseText);
-        if (xhr.status === 200 && data && data[0] && data[0].src) {
-          src = data[0].src;
-        } else {
-          errorMessage = (data && data.error) || ('HTTP ' + xhr.status);
-        }
-      } catch (parseError) {
-        errorMessage = 'HTTP ' + xhr.status;
-      }
-
-      if (src) {
-        finishItem(item, file, src);
-      } else {
-        failItem(item, file, errorMessage);
-      }
-      activeUploads--;
-      pumpQueue();
-    };
-
-    xhr.onerror = function () {
-      failItem(item, file, '网络错误');
-      activeUploads--;
-      pumpQueue();
-    };
-
-    xhr.send(formData);
-  }
-
-  function finishItem(item, file, src) {
-    var fullUrl = location.origin + src;
-    uploaded.push({ url: fullUrl, fileName: file.name });
-
-    item.root.classList.add('done');
-    item.bar.style.width = '100%';
-    item.meta.textContent = '';
-    var state = document.createElement('span');
-    state.className = 'state';
-    state.innerHTML = TICK_ICON;
-    state.appendChild(document.createTextNode('上传成功'));
-    item.meta.appendChild(document.createTextNode(formatSize(file.size) + ' · '));
-    item.meta.appendChild(state);
-
-    var copyButton = document.createElement('button');
-    copyButton.type = 'button';
-    copyButton.className = 'copy-one';
-    copyButton.title = '复制链接';
-    copyButton.setAttribute('aria-label', '复制 ' + file.name + ' 的链接');
-    copyButton.innerHTML = COPY_ICON;
-    copyButton.addEventListener('click', function () {
-      copyText(formatLink({ url: fullUrl, fileName: file.name }, currentFormat));
-    });
-    item.root.appendChild(copyButton);
-
-    renderOutput();
-  }
-
-  function failItem(item, file, message) {
-    item.root.classList.add('error');
-    item.bar.style.width = '100%';
-    item.meta.className = 'meta error';
-    item.meta.textContent = '上传失败：' + message;
-  }
-
-  // ---- link formats ----
-  function formatLink(entry, format) {
-    switch (format) {
-      case 'markdown': return '![' + entry.fileName + '](' + entry.url + ')';
-      case 'bbcode': return '[img]' + entry.url + '[/img]';
-      case 'html': return '<img src="' + entry.url + '" alt="' + escapeHtml(entry.fileName) + '">';
-      default: return entry.url;
-    }
-  }
-
-  function escapeHtml(text) {
-    return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-  }
-
-  function renderOutput() {
-    resultsCard.hidden = uploaded.length === 0;
-    linkOutput.value = uploaded.map(function (entry) {
-      return formatLink(entry, currentFormat);
-    }).join('\n');
-  }
-
-  document.getElementById('format-tabs').addEventListener('click', function (event) {
-    var button = event.target.closest('button[data-format]');
-    if (!button) return;
-    currentFormat = button.dataset.format;
-    this.querySelectorAll('button').forEach(function (other) {
-      other.classList.toggle('active', other === button);
-    });
-    renderOutput();
-  });
-
-  document.getElementById('copy-all').addEventListener('click', function () {
-    if (linkOutput.value) copyText(linkOutput.value);
-  });
-
-  document.getElementById('clear-all').addEventListener('click', function () {
-    uploaded = [];
-    queue.textContent = '';
-    updateCount();
-    renderOutput();
-  });
-
-  // ---- helpers ----
-  function copyText(text) {
-    var done = function () { showToast('已复制到剪贴板'); };
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(text).then(done, function () { legacyCopy(text); done(); });
-    } else {
-      legacyCopy(text);
-      done();
-    }
-  }
-
-  function legacyCopy(text) {
-    var textarea = document.createElement('textarea');
-    textarea.value = text;
-    textarea.style.position = 'fixed';
-    textarea.style.opacity = '0';
-    document.body.appendChild(textarea);
-    textarea.select();
-    document.execCommand('copy');
-    document.body.removeChild(textarea);
-  }
-
-  function showToast(message) {
-    toast.textContent = message;
-    toast.classList.add('show');
-    clearTimeout(toastTimer);
-    toastTimer = setTimeout(function () { toast.classList.remove('show'); }, 1800);
-  }
-
-  function formatSize(bytes) {
-    if (bytes < 1024) return bytes + ' B';
-    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
-    return (bytes / 1024 / 1024).toFixed(2) + ' MB';
-  }
-})();
-</script>
+  <script type="module" src="/js/workspace.js"></script>
 </body>
 </html>
