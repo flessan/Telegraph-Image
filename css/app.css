@@ -75,6 +75,24 @@
   --rail-w: 80px;
   --bottom-nav-h: 64px;
   --status-h: 36px;
+
+  /* Layering scale. Every fixed/overlay surface in the product picks a token
+     from this list instead of inventing its own number, so the stacking order
+     stays auditable: content < shell chrome < overlays < menus < notifications. */
+  --z-content: 1;
+  --z-bulk-bar: 20;
+  --z-app-header: 30;
+  --z-nav-scrim: 40;
+  --z-nav-drawer: 45;
+  --z-sheet-scrim: 50;
+  --z-sheet: 55;
+  --z-dialog-scrim: 60;
+  --z-dialog: 65;
+  --z-menu: 70;
+  --z-palette-scrim: 75;
+  --z-palette: 80;
+  --z-snackbar: 90;
+  --z-skip-link: 100;
   --focus: 0 0 0 2px var(--md-sys-color-surface), 0 0 0 4px var(--md-sys-color-primary);
   --focus-inverse: 0 0 0 2px var(--md-sys-color-primary-container), 0 0 0 4px var(--md-sys-color-on-primary-container);
   --ease-out: cubic-bezier(0.05, 0.7, 0.1, 1);
@@ -120,6 +138,11 @@ html[data-theme="dark"] {
 
 *, *::before, *::after { box-sizing: border-box; }
 
+/* Components below set explicit display values (flex/grid/inline-block) which
+   would otherwise defeat the `hidden` attribute the scripts toggle. Keep this
+   rule ahead of the component layer so `hidden` always means hidden. */
+[hidden] { display: none !important; }
+
 html, body { height: 100%; margin: 0; }
 
 html { color-scheme: light; }
@@ -148,7 +171,7 @@ ul, ol { margin: 0; padding: 0; list-style: none; }
   position: absolute;
   left: var(--space-3);
   top: -48px;
-  z-index: 200;
+  z-index: var(--z-skip-link);
   padding: var(--space-2) var(--space-4);
   background: var(--md-sys-color-primary);
   color: var(--md-sys-color-on-primary);
@@ -162,6 +185,53 @@ ul, ol { margin: 0; padding: 0; list-style: none; }
 .sr-only {
   position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
   overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+/* ---------- Brand lockup ----------
+   Shared by the workspace header, the console header and the login card.
+   This lives in the shared layer because every surface that renders the mark
+   needs the intrinsic sizing: the mark's <svg> has only a viewBox, so without
+   an explicit box it stretches to fill its container. */
+.brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+  flex: none;
+  text-decoration: none;
+  color: inherit;
+  padding: var(--space-1) var(--space-2) var(--space-1) 0;
+  border-radius: var(--radius-xs);
+}
+
+.brand-mark {
+  width: 36px;
+  height: 36px;
+  flex: none;
+  border-radius: 10px;
+  background: var(--md-sys-color-primary-container);
+  color: var(--md-sys-color-on-primary-container);
+  display: grid;
+  place-items: center;
+}
+.brand-mark svg { width: 22px; height: 22px; }
+
+.brand-text { min-width: 0; }
+.brand-name {
+  display: block;
+  font: var(--type-title);
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.brand-tag {
+  display: block;
+  font: var(--type-label);
+  color: var(--md-sys-color-on-surface-variant);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* ---------- Buttons ---------- */
@@ -338,7 +408,7 @@ ul, ol { margin: 0; padding: 0; list-style: none; }
   gap: var(--space-4);
   opacity: 0;
   pointer-events: none;
-  z-index: 150;
+  z-index: var(--z-snackbar);
   transition: opacity var(--dur-med) var(--ease-out), transform var(--dur-med) var(--ease-out);
 }
 .snackbar.show { opacity: 1; transform: translate(-50%, 0); pointer-events: auto; }
@@ -360,7 +430,7 @@ ul, ol { margin: 0; padding: 0; list-style: none; }
   opacity: 0;
   pointer-events: none;
   transition: opacity var(--dur-med) var(--ease-out);
-  z-index: 100;
+  z-index: var(--z-dialog-scrim);
 }
 .scrim.open { opacity: 1; pointer-events: auto; }
 
@@ -370,8 +440,9 @@ ul, ol { margin: 0; padding: 0; list-style: none; }
   top: 50%;
   transform: translate(-50%, -48%) scale(0.96);
   width: min(480px, calc(100vw - 32px));
-  max-height: calc(100vh - 64px);
+  max-height: min(calc(100vh - 64px), calc(100dvh - 32px));
   overflow: auto;
+  overscroll-behavior: contain;
   background: var(--md-sys-color-surface-container-high);
   color: var(--md-sys-color-on-surface);
   border-radius: var(--radius-lg);
@@ -379,18 +450,19 @@ ul, ol { margin: 0; padding: 0; list-style: none; }
   padding: var(--space-6);
   opacity: 0;
   pointer-events: none;
-  z-index: 110;
+  z-index: var(--z-dialog);
   transition: opacity var(--dur-med) var(--ease-out), transform var(--dur-med) var(--ease-out);
 }
 .dialog.open { opacity: 1; transform: translate(-50%, -50%) scale(1); pointer-events: auto; }
-.dialog h2 { margin: 0 0 var(--space-2); font: var(--type-headline); }
-.dialog p { margin: 0 0 var(--space-5); color: var(--md-sys-color-on-surface-variant); }
-.dialog .dialog-actions { display: flex; justify-content: flex-end; gap: var(--space-2); flex-wrap: wrap; }
+.dialog h2 { margin: 0 0 var(--space-2); font: var(--type-headline); overflow-wrap: anywhere; }
+.dialog p { margin: 0 0 var(--space-5); color: var(--md-sys-color-on-surface-variant); overflow-wrap: anywhere; }
+.dialog p:empty { display: none; margin: 0; }
+.dialog .dialog-actions { display: flex; justify-content: flex-end; gap: var(--space-2); flex-wrap: wrap; margin-top: var(--space-6); }
 
 /* ---------- Side sheet ---------- */
 .sheet-backdrop {
   position: fixed; inset: 0; background: var(--md-sys-color-scrim);
-  opacity: 0; pointer-events: none; z-index: 90;
+  opacity: 0; pointer-events: none; z-index: var(--z-sheet-scrim);
   transition: opacity var(--dur-med) var(--ease-out);
 }
 .sheet-backdrop.open { opacity: 1; pointer-events: auto; }
@@ -402,7 +474,7 @@ ul, ol { margin: 0; padding: 0; list-style: none; }
   box-shadow: var(--elev-3);
   transform: translateX(100%);
   transition: transform var(--dur-med) var(--ease-out);
-  z-index: 95;
+  z-index: var(--z-sheet);
   display: flex;
   flex-direction: column;
 }
@@ -429,16 +501,26 @@ ul, ol { margin: 0; padding: 0; list-style: none; }
   border-radius: var(--radius-sm);
   box-shadow: var(--elev-2);
   padding: var(--space-1);
-  z-index: 130;
+  z-index: var(--z-menu);
+}
+.menu {
+  max-width: calc(100vw - 16px);
+  max-height: min(70vh, 480px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 .menu button, .menu a {
   display: flex; align-items: center; gap: var(--space-3);
-  width: 100%; text-align: left;
+  width: 100%; text-align: left; min-height: 40px;
   padding: var(--space-2) var(--space-3);
   border: 0; border-radius: var(--radius-xs);
   background: transparent; color: var(--md-sys-color-on-surface);
   font: var(--type-body); text-decoration: none;
 }
+/* Menu glyphs are inline SVGs carrying only a viewBox, so they need an
+   explicit box or they expand to fill the row. */
+.menu button svg, .menu a svg { width: 20px; height: 20px; flex: none; }
+.menu button span, .menu a span { min-width: 0; overflow-wrap: anywhere; }
 .menu button:hover, .menu a:hover { background: var(--md-sys-color-surface-container-high); }
 .menu button.danger, .menu a.danger { color: var(--md-sys-color-error); }
 .menu hr { border: 0; border-top: 1px solid var(--md-sys-color-outline-variant); margin: var(--space-1) 0; }
@@ -460,7 +542,7 @@ ul, ol { margin: 0; padding: 0; list-style: none; }
   background: var(--md-sys-color-surface-container-high);
   border-radius: var(--radius-lg);
   box-shadow: var(--elev-3);
-  z-index: 120;
+  z-index: var(--z-palette);
   overflow: hidden;
   opacity: 0; pointer-events: none;
   transition: opacity var(--dur-med) var(--ease-out), transform var(--dur-med) var(--ease-out);
@@ -471,7 +553,7 @@ ul, ol { margin: 0; padding: 0; list-style: none; }
   border: 0; background: transparent; color: var(--md-sys-color-on-surface);
   font: var(--type-title);
 }
-.palette-results { max-height: 50vh; overflow: auto; padding: var(--space-1); }
+.palette-results { max-height: min(50vh, 420px); overflow: auto; overscroll-behavior: contain; padding: var(--space-1); }
 .palette-item {
   display: flex; align-items: center; gap: var(--space-3);
   width: 100%; text-align: left; padding: var(--space-3);
@@ -479,11 +561,28 @@ ul, ol { margin: 0; padding: 0; list-style: none; }
   background: transparent; color: var(--md-sys-color-on-surface);
 }
 .palette-item.active, .palette-item:hover { background: var(--md-sys-color-surface-container-highest); }
+.palette-item > span:first-child { min-width: 0; overflow-wrap: anywhere; }
 .palette-item kbd {
-  margin-left: auto; font: var(--type-label);
+  margin-left: auto; flex: none; font: var(--type-label);
   color: var(--md-sys-color-on-surface-variant);
   background: var(--md-sys-color-surface-container-lowest);
   padding: 2px 6px; border-radius: 6px;
+}
+
+/* ---------- Shared overlay behaviour on small screens ----------
+   Sheets become full-surface, the palette docks near the top edge and the
+   snackbar clears the viewport gutter. Kept in the shared layer so the
+   workspace and the console behave identically. */
+@media (max-width: 600px) {
+  .sheet { width: 100vw; }
+  .palette {
+    top: var(--space-3);
+    width: calc(100vw - 16px);
+    border-radius: var(--radius-md);
+  }
+  .palette input { height: 52px; padding: 0 var(--space-4); }
+  .snackbar { left: var(--space-3); right: var(--space-3); transform: translate(0, 16px); max-width: none; }
+  .snackbar.show { transform: translate(0, 0); }
 }
 
 @media (prefers-reduced-motion: reduce) {
