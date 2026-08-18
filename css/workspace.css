@@ -357,12 +357,38 @@ a { color: var(--md-sys-color-primary); }
   font-weight: 600;
 }
 
+.nav-badge {
+  margin-left: auto;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 10px;
+  background: var(--md-sys-color-primary);
+  color: var(--md-sys-color-on-primary);
+  font: var(--type-label);
+  display: inline-grid;
+  place-items: center;
+}
+.nav-item[aria-current="page"] .nav-badge {
+  background: var(--md-sys-color-on-secondary-container);
+  color: var(--md-sys-color-secondary-container);
+}
+.nav-badge[hidden] { display: none; }
+
 .staging-card {
   margin-top: auto;
   background: var(--md-sys-color-surface-container-low);
   border: 1px solid var(--md-sys-color-outline-variant);
   border-radius: var(--radius-md);
   padding: var(--space-4);
+  text-align: left;
+  color: inherit;
+  width: 100%;
+}
+.staging-card:hover { background: var(--md-sys-color-surface-container); }
+.staging-size {
+  margin-top: var(--space-2) !important;
+  color: var(--md-sys-color-primary) !important;
 }
 .staging-card h2 {
   margin: 0 0 var(--space-2);
@@ -606,7 +632,11 @@ a { color: var(--md-sys-color-primary); }
 .file-card:focus-visible { box-shadow: var(--focus); }
 .file-card.selected {
   border-color: var(--md-sys-color-primary);
+  background: color-mix(in srgb, var(--md-sys-color-primary) 8%, var(--md-sys-color-surface-container-lowest));
   box-shadow: 0 0 0 1px var(--md-sys-color-primary), var(--elev-1);
+}
+.file-card.synced-flash {
+  box-shadow: 0 0 0 1px var(--md-sys-color-primary-container), var(--elev-1);
 }
 .file-card.pushing { opacity: 0.92; }
 .file-card.failed { border-color: color-mix(in srgb, var(--md-sys-color-error) 45%, transparent); }
@@ -895,7 +925,14 @@ a { color: var(--md-sys-color-primary); }
   padding: var(--space-6);
 }
 .workspace.dragover .drop-layer,
-#dropzone.dragover .drop-layer { display: grid; }
+#dropzone.dragover .drop-layer,
+.app.dragover .drop-layer { display: grid; }
+.app.dragover .drop-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 35;
+  border-radius: 0;
+}
 .drop-layer strong { display: block; font: var(--type-title); margin-bottom: var(--space-2); }
 
 /* dialogs / menus */

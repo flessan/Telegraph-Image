@@ -14,10 +14,14 @@ const state = {
   sort: 'date:desc',
   query: '',
   selected: new Set(),
+  lastSelectedId: null,
   theme: 'light',
   format: 'url',
   config: null,
   pushing: false,
+  online: typeof navigator === 'undefined' ? true : navigator.onLine !== false,
+  previewId: null,
+  previewZoom: false,
   objectUrls: new Map(),
 };
 
@@ -266,6 +270,42 @@ function escapeHtml(text) {
     .replace(/"/g, '&quot;');
 }
 
+function isPendingLike(item) {
+  return item.status === 'pending' || item.status === 'pushing' || item.status === 'failed';
+}
+
+function matchesQuery(item, raw) {
+  const q = String(raw || '').trim().toLowerCase();
+  if (!q) return true;
+  return q.split(/\s+/).every((token) => tokenMatches(item, token));
+}
+
+function tokenMatches(item, token) {
+  if (!token) return true;
+  if (token.charAt(0) === '.') {
+    return String(item.name || '').toLowerCase().endsWith(token);
+  }
+  if (token.indexOf('status:') === 0) {
+    const wanted = token.slice(7);
+    return item.status === wanted || (wanted === 'local' && item.status !== 'synced');
+  }
+  if (token.indexOf('type:') === 0) {
+    const wanted = token.slice(5);
+    return (item.type || '').toLowerCase().indexOf(wanted) !== -1
+      || extOf(item.name).toLowerCase() === wanted;
+  }
+  if (token === 'image' || token === 'images' || token === 'gambar') return isImage(item);
+  if (token === 'pending' || token === 'menunggu' || token === 'local' || token === 'lokal') {
+    return item.status === 'pending' || item.status === 'pushing';
+  }
+  if (token === 'synced' || token === 'tersimpan' || token === 'remote') return item.status === 'synced';
+  if (token === 'failed' || token === 'gagal') return item.status === 'failed';
+  const name = String(item.name || '').toLowerCase();
+  const type = String(item.type || '').toLowerCase();
+  const ext = extOf(item.name).toLowerCase();
+  return name.indexOf(token) !== -1 || type.indexOf(token) !== -1 || ext.indexOf(token) !== -1;
+}
+
 function visibleItems() {
   let list = state.items.slice();
   if (state.view === 'images') list = list.filter(isImage);
@@ -273,8 +313,8 @@ function visibleItems() {
     const cutoff = Date.now() - RECENT_MS;
     list = list.filter((item) => (item.pushedAt || item.addedAt) >= cutoff);
   }
-  const q = state.query.trim().toLowerCase();
-  if (q) list = list.filter((item) => (item.name || '').toLowerCase().indexOf(q) !== -1);
+  if (state.view === 'changes') list = list.filter(isPendingLike);
+  if (state.query) list = list.filter((item) => matchesQuery(item, state.query));
 
   const [key, dir] = state.sort.split(':');
   list.sort((a, b) => {
@@ -282,16 +322,26 @@ function visibleItems() {
     if (key === 'name') cmp = String(a.name).localeCompare(String(b.name), getLanguage(), { sensitivity: 'base' });
     else if (key === 'size') cmp = (a.size || 0) - (b.size || 0);
     else cmp = (a.addedAt || 0) - (b.addedAt || 0);
+    if (cmp === 0) cmp = String(a.id).localeCompare(String(b.id));
     return dir === 'asc' ? cmp : -cmp;
   });
   return list;
 }
 
 function counts() {
-  const pending = state.items.filter((i) => i.status === 'pending' || i.status === 'pushing').length;
-  const failed = state.items.filter((i) => i.status === 'failed').length;
+  const pendingItems = state.items.filter((i) => i.status === 'pending' || i.status === 'pushing');
+  const failedItems = state.items.filter((i) => i.status === 'failed');
   const synced = state.items.filter((i) => i.status === 'synced').length;
-  return { pending, failed, synced, total: state.items.length };
+  const totalSize = state.items.reduce((sum, item) => sum + (Number(item.size) || 0), 0);
+  const pendingSize = pendingItems.concat(failedItems).reduce((sum, item) => sum + (Number(item.size) || 0), 0);
+  return {
+    pending: pendingItems.length,
+    failed: failedItems.length,
+    synced,
+    total: state.items.length,
+    totalSize,
+    pendingSize,
+  };
 }
 
 async function addFiles(fileList) {
@@ -328,6 +378,7 @@ async function addFiles(fileList) {
     idbPut(item);
   }
   announce(plural('announceAdded', added.length));
+  showToast(plural('announceAdded', added.length));
   render();
 }
 
@@ -363,6 +414,10 @@ async function removeItem(id) {
 }
 
 async function pushItems(ids) {
+  if (!state.online) {
+    showToast(t('offlinePush'));
+    return;
+  }
   const targets = state.items.filter((item) => {
     if (ids && ids.indexOf(item.id) === -1) return false;
     return (item.status === 'pending' || item.status === 'failed') && item.file;
@@ -530,13 +585,18 @@ function render() {
   applyStaticI18n(document);
   applyTheme();
   renderChrome();
+  renderChanges();
   renderBrowser();
   renderLinks();
+  if (state.previewId && !$('preview-dialog').hidden) fillPreview(findItem(state.previewId));
 }
 
 function renderChrome() {
   const c = counts();
-  const crumbKey = state.view === 'images' ? 'navImages' : state.view === 'recent' ? 'navRecent' : 'navFiles';
+  const crumbKey = state.view === 'images' ? 'navImages'
+    : state.view === 'recent' ? 'navRecent'
+    : state.view === 'changes' ? 'navChanges'
+    : 'navFiles';
   const crumb = $('crumb-current');
   if (crumb) crumb.textContent = t(crumbKey);
 
@@ -550,26 +610,39 @@ function renderChrome() {
 
   const push = $('push-changes');
   const pushLabel = $('push-label');
-  const canPush = !state.pushing && state.items.some((i) => (i.status === 'pending' || i.status === 'failed') && i.file);
+  const canPush = state.online && !state.pushing && state.items.some((i) => (i.status === 'pending' || i.status === 'failed') && i.file);
   push.disabled = !canPush;
+  push.setAttribute('aria-label', state.online ? t('pushChangesAria') : t('pushOfflineAria'));
   pushLabel.textContent = state.pushing ? t('pushing') : t('pushChanges');
 
   const stagingCount = $('staging-count');
   const stagingCopy = $('staging-copy');
-  if (stagingCount) stagingCount.textContent = String(c.pending);
-  if (stagingCopy) stagingCopy.textContent = c.pending ? plural('pendingBanner', c.pending) : t('stagingEmpty');
+  const stagingSize = $('staging-size');
+  const changeCount = c.pending + c.failed;
+  if (stagingCount) stagingCount.textContent = String(changeCount);
+  if (stagingCopy) stagingCopy.textContent = changeCount ? plural('pendingBanner', changeCount) : t('stagingEmpty');
+  if (stagingSize) stagingSize.textContent = changeCount ? t('pendingSizeLabel', { size: formatSize(c.pendingSize) }) : '';
 
-  const pendingBar = $('pending-bar');
-  const pendingTitle = $('pending-title');
-  if (c.pending || c.failed) {
-    pendingBar.hidden = false;
-    pendingTitle.textContent = c.pending ? plural('pendingBanner', c.pending) : plural('statusBarFailed', c.failed);
-  } else {
-    pendingBar.hidden = true;
+  const badge = $('nav-changes-badge');
+  if (badge) {
+    badge.hidden = changeCount === 0;
+    badge.textContent = String(changeCount);
   }
-  $('retry-failed').hidden = c.failed === 0;
+
+  const offline = $('offline-banner');
+  if (offline) {
+    offline.hidden = state.online;
+    offline.textContent = t('offlineBanner');
+  }
+
+  const retry = $('retry-failed');
+  if (retry) retry.hidden = c.failed === 0;
+  const clearPending = $('clear-pending');
+  if (clearPending) clearPending.disabled = c.pending === 0 || state.pushing;
 
   $('visible-count').textContent = t('fileCount', { n: visibleItems().length });
+  const localStats = $('status-local');
+  if (localStats) localStats.textContent = t('localStats', { n: c.total, size: formatSize(c.totalSize) });
   $('status-files').textContent = plural('statusBarFiles', c.total);
   $('status-pending').textContent = c.pending ? t('statusBarPending', { n: c.pending }) : '';
   $('status-failed').textContent = c.failed ? t('statusBarFailed', { n: c.failed }) : '';
@@ -578,6 +651,94 @@ function renderChrome() {
 
   const clear = $('search-clear');
   if (clear) clear.hidden = !state.query;
+  renderBulkBar();
+}
+
+function renderBulkBar() {
+  const bar = $('bulk-bar');
+  if (!bar) return;
+  const count = state.selected.size;
+  bar.hidden = count === 0;
+  $('bulk-count').textContent = count ? t('selectedCount', { n: count }) : '';
+  const selected = selectedItems();
+  const canPush = state.online && selected.some((item) => (item.status === 'pending' || item.status === 'failed') && item.file);
+  const canCopy = selected.some((item) => item.url);
+  $('bulk-push').disabled = !canPush;
+  $('bulk-copy').disabled = !canCopy;
+}
+
+function selectedItems() {
+  return state.items.filter((item) => state.selected.has(item.id));
+}
+
+function changeSetItems() {
+  return state.items.filter(isPendingLike).sort((a, b) => (b.addedAt || 0) - (a.addedAt || 0));
+}
+
+function renderChanges() {
+  const panel = $('changes-panel');
+  const list = $('changes-list');
+  if (!panel || !list) return;
+  const items = changeSetItems();
+  const c = counts();
+  if (!items.length) {
+    panel.hidden = true;
+    list.replaceChildren();
+    return;
+  }
+  panel.hidden = false;
+  const summary = $('changes-summary');
+  if (summary) {
+    summary.textContent = c.failed && !c.pending
+      ? t('changesSummaryFailed', { n: c.failed, size: formatSize(c.pendingSize) })
+      : t('changesSummary', { n: items.length, size: formatSize(c.pendingSize) });
+  }
+  list.replaceChildren();
+  items.forEach((item) => list.appendChild(buildChangeRow(item)));
+}
+
+function buildChangeRow(item) {
+  const row = document.createElement('li');
+  row.className = 'change-row';
+  row.dataset.id = item.id;
+  const thumb = document.createElement('div');
+  thumb.className = 'list-thumb';
+  thumb.appendChild(thumbContent(item, false));
+  const body = document.createElement('div');
+  body.className = 'change-name';
+  body.textContent = item.name;
+  const meta = document.createElement('div');
+  meta.className = 'change-meta';
+  meta.textContent = formatSize(item.size) + ' · ' + statusLabel(item.status);
+  const actions = document.createElement('div');
+  actions.className = 'change-actions';
+  const review = document.createElement('button');
+  review.type = 'button';
+  review.className = 'btn text';
+  review.textContent = t('changesReview');
+  review.addEventListener('click', () => openPreview(item.id));
+  actions.appendChild(review);
+  if (item.status === 'failed') {
+    const retry = document.createElement('button');
+    retry.type = 'button';
+    retry.className = 'btn text';
+    retry.textContent = t('retry');
+    retry.addEventListener('click', () => pushItems([item.id]));
+    actions.appendChild(retry);
+  }
+  if (item.status !== 'pushing') {
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'btn text';
+    remove.textContent = t('remove');
+    remove.addEventListener('click', () => askRemove(item));
+    actions.appendChild(remove);
+  }
+  row.appendChild(thumb);
+  row.appendChild(body);
+  row.appendChild(meta);
+  row.appendChild(actions);
+  return row;
 }
 
 function renderBrowser() {
@@ -617,6 +778,7 @@ function emptyCopy() {
   if (state.query) return { title: t('emptySearchTitle'), body: t('emptySearchBody') };
   if (state.view === 'images') return { title: t('emptyImagesTitle'), body: t('emptyImagesBody') };
   if (state.view === 'recent') return { title: t('emptyRecentTitle'), body: t('emptyRecentBody') };
+  if (state.view === 'changes') return { title: t('emptyChangesTitle'), body: t('emptyChangesBody') };
   return { title: t('emptyFilesTitle'), body: t('emptyFilesBody') };
 }
 
@@ -808,12 +970,25 @@ function buildRow(item) {
 function bindItemOpen(el, item) {
   el.addEventListener('click', (event) => {
     if (event.target.closest('input, button, a')) return;
+    if (event.metaKey || event.ctrlKey) {
+      toggleSelect(item.id, !state.selected.has(item.id));
+      state.lastSelectedId = item.id;
+      return;
+    }
+    if (event.shiftKey) {
+      rangeSelect(item.id);
+      return;
+    }
     openPreview(item.id);
   });
   el.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter' || event.key === ' ') {
+    if (event.key === 'Enter') {
       event.preventDefault();
       openPreview(item.id);
+    } else if (event.key === ' ') {
+      event.preventDefault();
+      toggleSelect(item.id, !state.selected.has(item.id));
+      state.lastSelectedId = item.id;
     }
   });
 }
@@ -821,7 +996,42 @@ function bindItemOpen(el, item) {
 function toggleSelect(id, on) {
   if (on) state.selected.add(id);
   else state.selected.delete(id);
-  render();
+  state.lastSelectedId = id;
+  applySelectionClasses();
+}
+
+function rangeSelect(id) {
+  const items = visibleItems();
+  const target = items.findIndex((item) => item.id === id);
+  const origin = items.findIndex((item) => item.id === state.lastSelectedId);
+  if (target === -1) return;
+  const start = origin === -1 ? target : Math.min(origin, target);
+  const end = origin === -1 ? target : Math.max(origin, target);
+  for (let i = start; i <= end; i++) state.selected.add(items[i].id);
+  applySelectionClasses();
+}
+
+function applySelectionClasses() {
+  document.querySelectorAll('[data-id]').forEach((el) => {
+    const on = state.selected.has(el.dataset.id);
+    el.classList.toggle('selected', on);
+    const box = el.querySelector('input[type="checkbox"]');
+    if (box) box.checked = on;
+  });
+  renderChrome();
+  renderLinks();
+}
+
+function clearSelection() {
+  if (!state.selected.size) return;
+  state.selected.clear();
+  applySelectionClasses();
+}
+
+function selectAllVisible() {
+  visibleItems().forEach((item) => state.selected.add(item.id));
+  announce(t('announceSelected', { n: state.selected.size }));
+  applySelectionClasses();
 }
 
 function renderLinks() {
@@ -839,21 +1049,33 @@ function renderLinks() {
   output.value = source.map((item) => formatLink(item, state.format)).join('\n');
 }
 
+function previewSet() {
+  const items = visibleItems();
+  const images = items.filter(isImage);
+  return images.length ? images : items;
+}
+
 function openPreview(id) {
   const item = findItem(id);
   if (!item) return;
   lastFocus = document.activeElement;
-  const dialog = $('preview-dialog');
+  state.previewId = id;
+  fillPreview(item);
+  openOverlayDialog($('preview-dialog'));
+}
+
+function fillPreview(item) {
+  if (!item) return;
   $('preview-title').textContent = item.name;
   $('meta-name').textContent = item.name;
   $('meta-dims').textContent = item.width && item.height ? item.width + ' × ' + item.height : t('noDimensions');
   $('meta-mime').textContent = item.type || t('unknownType');
   $('meta-size').textContent = formatSize(item.size);
   $('meta-status').textContent = statusLabel(item.status) + (item.error ? ' — ' + item.error : '');
-  const urlInput = $('meta-url');
-  urlInput.value = item.url || t('noPublicUrl');
+  $('meta-url').value = item.url || t('noPublicUrl');
 
   const stage = $('preview-stage');
+  stage.classList.toggle('zoomed', !!state.previewZoom);
   stage.replaceChildren();
   if (isImage(item)) {
     const src = item.url || localPreview(item);
@@ -861,6 +1083,10 @@ function openPreview(id) {
       const img = document.createElement('img');
       img.alt = item.name;
       img.src = src;
+      img.addEventListener('click', () => {
+        state.previewZoom = !state.previewZoom;
+        stage.classList.toggle('zoomed', state.previewZoom);
+      });
       stage.appendChild(img);
     }
   } else {
@@ -876,11 +1102,14 @@ function openPreview(id) {
 
   const copyBtn = $('preview-copy');
   copyBtn.disabled = !item.url;
-  copyBtn.onclick = () => item.url && copyText(formatLink(item, state.format));
-
-  const dl = $('preview-download');
-  dl.onclick = () => downloadItem(item);
-
+  copyBtn.textContent = t('copyOne');
+  copyBtn.onclick = () => {
+    if (!item.url) return;
+    copyText(formatLink(item, state.format));
+    copyBtn.textContent = t('copiedShort');
+    setTimeout(() => { copyBtn.textContent = t('copyOne'); }, 1400);
+  };
+  $('preview-download').onclick = () => downloadItem(item);
   const retry = $('preview-retry');
   retry.hidden = item.status !== 'failed';
   retry.onclick = () => {
@@ -888,7 +1117,22 @@ function openPreview(id) {
     pushItems([item.id]);
   };
 
-  openOverlayDialog(dialog);
+  const set = previewSet();
+  const index = set.findIndex((entry) => entry.id === item.id);
+  const prev = $('preview-prev');
+  const next = $('preview-next');
+  if (prev) prev.disabled = index <= 0;
+  if (next) next.disabled = index === -1 || index >= set.length - 1;
+}
+
+function stepPreview(delta) {
+  const set = previewSet();
+  const index = set.findIndex((entry) => entry.id === state.previewId);
+  const next = set[index + delta];
+  if (!next) return;
+  state.previewId = next.id;
+  state.previewZoom = false;
+  fillPreview(next);
 }
 
 function downloadItem(item) {
@@ -920,9 +1164,15 @@ function openItemMenu(item, anchor, x, y) {
     menu.appendChild(btn);
   };
   add(t('openPreview'), () => openPreview(item.id));
+  add(state.selected.has(item.id) ? t('clearSelection') : t('selectFile', { name: item.name }), () => {
+    toggleSelect(item.id, !state.selected.has(item.id));
+  });
   add(t('copyOne'), () => copyText(formatLink(item, state.format)), !item.url);
   add(t('download'), () => downloadItem(item), !(item.url || item.file));
-  if (item.status === 'failed') add(t('retry'), () => pushItems([item.id]));
+  if (item.status === 'pending' || item.status === 'failed') {
+    add(t('pushChanges'), () => pushItems([item.id]), !state.online || !item.file);
+  }
+  if (item.status === 'failed') add(t('retry'), () => pushItems([item.id]), !state.online);
   const sep = document.createElement('div');
   sep.className = 'sep';
   menu.appendChild(sep);
@@ -931,11 +1181,41 @@ function openItemMenu(item, anchor, x, y) {
 }
 
 function askRemove(item) {
+  $('confirm-title').textContent = t('confirmRemoveTitle');
   $('confirm-body').textContent = item.status === 'synced' ? t('confirmRemoveSynced') : t('confirmRemovePending');
   lastFocus = document.activeElement;
   openOverlayDialog($('confirm-dialog'));
   confirmResolver = (ok) => {
     if (ok) removeItem(item.id);
+  };
+}
+
+function askRemoveMany(ids) {
+  const removable = ids.filter((id) => {
+    const item = findItem(id);
+    return item && item.status !== 'pushing';
+  });
+  if (!removable.length) return;
+  $('confirm-title').textContent = t('confirmRemoveTitle');
+  $('confirm-body').textContent = t('confirmRemoveMany', { n: removable.length });
+  lastFocus = document.activeElement;
+  openOverlayDialog($('confirm-dialog'));
+  confirmResolver = (ok) => {
+    if (!ok) return;
+    removable.forEach((id) => removeItem(id));
+  };
+}
+
+function askClearPending() {
+  const ids = state.items.filter((item) => item.status === 'pending' || item.status === 'failed').map((item) => item.id);
+  if (!ids.length) return;
+  $('confirm-title').textContent = t('confirmClearPendingTitle');
+  $('confirm-body').textContent = t('confirmClearPending');
+  lastFocus = document.activeElement;
+  openOverlayDialog($('confirm-dialog'));
+  confirmResolver = (ok) => {
+    if (!ok) return;
+    ids.forEach((id) => removeItem(id));
   };
 }
 
@@ -950,13 +1230,16 @@ function openOverlayDialog(dialog) {
 }
 
 function closeDialogs() {
-  ['preview-dialog', 'confirm-dialog'].forEach((id) => {
+  ['preview-dialog', 'confirm-dialog', 'command-dialog'].forEach((id) => {
     const el = $(id);
+    if (!el) return;
     el.classList.remove('open');
     el.hidden = true;
   });
   $('overlay').classList.remove('open');
   $('overlay').hidden = true;
+  state.previewId = null;
+  state.previewZoom = false;
   if (confirmResolver) {
     const resolver = confirmResolver;
     confirmResolver = null;
@@ -1119,6 +1402,30 @@ function wireEvents() {
     const ids = state.items.filter((i) => i.status === 'failed').map((i) => i.id);
     pushItems(ids);
   });
+  if ($('clear-pending')) $('clear-pending').addEventListener('click', askClearPending);
+  if ($('staging-card')) $('staging-card').addEventListener('click', () => {
+    state.view = 'changes';
+    savePrefs();
+    render();
+  });
+  if ($('bulk-push')) $('bulk-push').addEventListener('click', () => pushItems(selectedItems().map((item) => item.id)));
+  if ($('bulk-copy')) $('bulk-copy').addEventListener('click', () => {
+    const text = selectedItems().filter((item) => item.url).map((item) => formatLink(item, state.format)).join('\n');
+    if (text) copyText(text);
+  });
+  if ($('bulk-download')) $('bulk-download').addEventListener('click', () => selectedItems().forEach(downloadItem));
+  if ($('bulk-remove')) $('bulk-remove').addEventListener('click', () => askRemoveMany(Array.from(state.selected)));
+  if ($('bulk-clear')) $('bulk-clear').addEventListener('click', clearSelection);
+  if ($('preview-prev')) $('preview-prev').addEventListener('click', () => stepPreview(-1));
+  if ($('preview-next')) $('preview-next').addEventListener('click', () => stepPreview(1));
+  if ($('preview-zoom')) $('preview-zoom').addEventListener('click', () => {
+    state.previewZoom = !state.previewZoom;
+    $('preview-stage').classList.toggle('zoomed', state.previewZoom);
+  });
+  if ($('command-input')) {
+    $('command-input').addEventListener('input', () => renderCommandList());
+    $('command-input').addEventListener('keydown', onCommandKey);
+  }
   $('refresh-btn').addEventListener('click', refreshWorkspace);
   $('theme-btn').addEventListener('click', () => {
     state.theme = state.theme === 'dark' ? 'light' : 'dark';
@@ -1188,15 +1495,33 @@ function wireEvents() {
   });
 
   document.addEventListener('keydown', (event) => {
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+      event.preventDefault();
+      openCommandPalette();
+      return;
+    }
     if (event.key === 'Escape') {
       if (activeMenu) { closeMenus(); return; }
-      if (!$('preview-dialog').hidden || !$('confirm-dialog').hidden) {
+      if (!$('preview-dialog').hidden || !$('confirm-dialog').hidden || !$('command-dialog').hidden) {
         closeDialogs();
+        return;
+      }
+      if (state.selected.size) {
+        clearSelection();
         return;
       }
       if ($('search-wrap').classList.contains('expanded')) {
         $('search-wrap').classList.remove('expanded');
       }
+    }
+    if (!$('preview-dialog').hidden && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
+      if (isTyping(event.target)) return;
+      event.preventDefault();
+      stepPreview(event.key === 'ArrowLeft' ? -1 : 1);
+    }
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'a' && !isTyping(event.target) && $('preview-dialog').hidden && $('command-dialog').hidden) {
+      event.preventDefault();
+      selectAllVisible();
     }
     if (activeMenu && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
       event.preventDefault();
@@ -1237,45 +1562,192 @@ function isTyping(el) {
   return tag === 'input' || tag === 'textarea' || tag === 'select' || el.isContentEditable;
 }
 
+function setDragOver(on) {
+  const zone = $('dropzone');
+  const app = $('app');
+  if (zone) zone.classList.toggle('dragover', on);
+  if (app) app.classList.toggle('dragover', on);
+}
+
 function wireDragAndPaste() {
   const zone = $('dropzone');
+  let dragDepth = 0;
   const prevent = (event) => { event.preventDefault(); event.stopPropagation(); };
-  ['dragenter', 'dragover'].forEach((type) => {
-    zone.addEventListener(type, (event) => {
-      prevent(event);
-      zone.classList.add('dragover');
-    });
-    document.addEventListener(type, (event) => {
-      if (hasFiles(event)) event.preventDefault();
-    });
+
+  document.addEventListener('dragenter', (event) => {
+    if (!hasFiles(event)) return;
+    prevent(event);
+    dragDepth += 1;
+    setDragOver(true);
   });
-  ['dragleave', 'drop'].forEach((type) => {
-    zone.addEventListener(type, (event) => {
-      prevent(event);
-      if (type === 'dragleave' && event.target !== zone && zone.contains(event.relatedTarget)) return;
-      zone.classList.remove('dragover');
-    });
+  document.addEventListener('dragover', (event) => {
+    if (!hasFiles(event)) return;
+    prevent(event);
+    setDragOver(true);
   });
+  document.addEventListener('dragleave', (event) => {
+    if (!hasFiles(event) && dragDepth === 0) return;
+    dragDepth = Math.max(0, dragDepth - 1);
+    if (dragDepth === 0) setDragOver(false);
+  });
+  document.addEventListener('drop', (event) => {
+    if (!hasFiles(event) && !(event.dataTransfer && event.dataTransfer.files && event.dataTransfer.files.length)) {
+      setDragOver(false);
+      return;
+    }
+    prevent(event);
+    dragDepth = 0;
+    setDragOver(false);
+    if (event.dataTransfer && event.dataTransfer.files && event.dataTransfer.files.length) {
+      addFiles(event.dataTransfer.files);
+    }
+  });
+
+  zone.addEventListener('dragenter', prevent);
+  zone.addEventListener('dragover', prevent);
   zone.addEventListener('drop', (event) => {
-    zone.classList.remove('dragover');
+    prevent(event);
+    dragDepth = 0;
+    setDragOver(false);
     if (event.dataTransfer && event.dataTransfer.files && event.dataTransfer.files.length) {
       addFiles(event.dataTransfer.files);
     }
   });
 
   document.addEventListener('paste', (event) => {
-    if (isTyping(event.target)) return;
-    if (!event.clipboardData) return;
-    const files = [];
-    for (let i = 0; i < event.clipboardData.items.length; i++) {
-      const item = event.clipboardData.items[i];
-      if (item.kind === 'file') {
-        const file = item.getAsFile();
-        if (file) files.push(file);
-      }
+    if (isTyping(event.target) || !$('command-dialog').hidden) return;
+    const files = filesFromClipboardEvent(event);
+    if (files.length) {
+      event.preventDefault();
+      addFiles(files);
+      showToast(t('pasteSuccess'));
+      announce(t('announcePasted'));
     }
-    if (files.length) addFiles(files);
   });
+}
+
+function filesFromClipboardEvent(event) {
+  const files = [];
+  if (!event.clipboardData) return files;
+  for (let i = 0; i < event.clipboardData.items.length; i++) {
+    const item = event.clipboardData.items[i];
+    if (item.kind === 'file') {
+      const file = item.getAsFile();
+      if (file) files.push(file);
+    }
+  }
+  return files;
+}
+
+async function pasteFromClipboard() {
+  if (navigator.clipboard && navigator.clipboard.read) {
+    try {
+      const items = await navigator.clipboard.read();
+      const files = [];
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        const type = item.types.find((entry) => entry.indexOf('image/') === 0);
+        if (!type) continue;
+        const blob = await item.getType(type);
+        const ext = type.split('/')[1] || 'png';
+        files.push(new File([blob], 'clipboard-' + Date.now() + '.' + ext, { type: blob.type || type }));
+      }
+      if (files.length) {
+        await addFiles(files);
+        showToast(t('pasteSuccess'));
+        announce(t('announcePasted'));
+        return;
+      }
+    } catch (_) { /* permission or empty clipboard */ }
+  }
+  showToast(t('pasteEmpty'));
+}
+
+function commandItems() {
+  const pending = state.items.some((item) => (item.status === 'pending' || item.status === 'failed') && item.file);
+  return [
+    { id: 'upload', label: t('commandUpload'), hint: 'Ctrl/Cmd+U', run: () => $('file-input').click() },
+    { id: 'paste', label: t('commandPaste'), hint: 'Ctrl/Cmd+V', run: () => pasteFromClipboard() },
+    { id: 'push', label: t('commandPush'), hint: 'Ctrl/Cmd+Enter', disabled: !pending || !state.online, run: () => pushItems() },
+    { id: 'clear', label: t('commandClearPending'), disabled: !pending, run: askClearPending },
+    { id: 'select', label: t('commandSelectAll'), run: selectAllVisible },
+    { id: 'grid', label: t('commandGrid'), disabled: state.layout === 'grid', run: () => { state.layout = 'grid'; savePrefs(); render(); } },
+    { id: 'list', label: t('commandList'), disabled: state.layout === 'list', run: () => { state.layout = 'list'; savePrefs(); render(); } },
+    { id: 'refresh', label: t('commandRefresh'), run: refreshWorkspace },
+    { id: 'theme', label: t('commandTheme'), run: () => { state.theme = state.theme === 'dark' ? 'light' : 'dark'; savePrefs(); applyTheme(); } },
+    { id: 'en', label: t('commandLangEn'), disabled: getLanguage() === 'en', run: () => setLanguage('en') },
+    { id: 'id', label: t('commandLangId'), disabled: getLanguage() === 'id', run: () => setLanguage('id') },
+  ];
+}
+
+function filteredCommands() {
+  const q = (($('command-input') && $('command-input').value) || '').trim().toLowerCase();
+  return commandItems().filter((item) => !q || item.label.toLowerCase().indexOf(q) !== -1);
+}
+
+function renderCommandList(selectedId) {
+  const list = $('command-list');
+  if (!list) return;
+  const items = filteredCommands();
+  list.replaceChildren();
+  items.forEach((item, index) => {
+    const li = document.createElement('li');
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'command-item';
+    btn.setAttribute('role', 'option');
+    btn.setAttribute('aria-selected', (!selectedId && index === 0) || selectedId === item.id ? 'true' : 'false');
+    btn.disabled = !!item.disabled;
+    btn.dataset.command = item.id;
+    const label = document.createElement('span');
+    label.textContent = item.label;
+    btn.appendChild(label);
+    if (item.hint) {
+      const hint = document.createElement('span');
+      hint.className = 'hint';
+      hint.textContent = item.hint;
+      btn.appendChild(hint);
+    }
+    btn.addEventListener('click', () => runCommand(item));
+    li.appendChild(btn);
+    list.appendChild(li);
+  });
+}
+
+function openCommandPalette() {
+  lastFocus = document.activeElement;
+  const dialog = $('command-dialog');
+  $('command-input').value = '';
+  renderCommandList();
+  openOverlayDialog(dialog);
+  $('command-input').focus();
+}
+
+function runCommand(item) {
+  if (!item || item.disabled) return;
+  closeDialogs();
+  item.run();
+}
+
+function onCommandKey(event) {
+  const buttons = Array.prototype.slice.call(document.querySelectorAll('#command-list .command-item:not([disabled])'));
+  if (!buttons.length) return;
+  const current = buttons.findIndex((btn) => btn.getAttribute('aria-selected') === 'true');
+  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    event.preventDefault();
+    const next = event.key === 'ArrowDown'
+      ? buttons[(current + 1 + buttons.length) % buttons.length]
+      : buttons[(current - 1 + buttons.length) % buttons.length];
+    buttons.forEach((btn) => btn.setAttribute('aria-selected', btn === next ? 'true' : 'false'));
+    next.focus();
+    $('command-input').focus();
+  }
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    const selected = buttons[current] || buttons[0];
+    const item = filteredCommands().find((entry) => entry.id === selected.dataset.command);
+    runCommand(item);
+  }
 }
 
 function hasFiles(event) {
@@ -1333,13 +1805,24 @@ async function boot() {
   state.theme = detectTheme(prefs);
   state.layout = prefs.layout === 'list' ? 'list' : 'grid';
   state.sort = prefs.sort || 'date:desc';
-  state.view = ['files', 'images', 'recent'].indexOf(prefs.view) !== -1 ? prefs.view : 'files';
+  state.view = ['files', 'images', 'recent', 'changes'].indexOf(prefs.view) !== -1 ? prefs.view : 'files';
+  state.online = navigator.onLine !== false;
 
   initI18n();
   applyTheme();
   onLanguageChange(() => render());
   wireEvents();
   document.addEventListener('keydown', trapFocus);
+  window.addEventListener('online', () => {
+    state.online = true;
+    announce(t('announceOnline'));
+    renderChrome();
+  });
+  window.addEventListener('offline', () => {
+    state.online = false;
+    announce(t('announceOffline'));
+    renderChrome();
+  });
 
   await restoreLocal();
   render();

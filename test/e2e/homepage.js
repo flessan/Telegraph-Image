@@ -140,6 +140,22 @@ async function clickPush(page) {
   check('选择文件后不会立即上传', stagedBeforePush.length === 0,
     `选择后立刻找到 ${stagedBeforePush.length} 条远程链接`);
 
+  const pendingVisible = await page.evaluate(() => {
+    const chips = [...document.querySelectorAll('[data-role="status"]')].map(el => el.textContent || '');
+    const changes = document.getElementById('changes-panel');
+    const listCount = document.querySelectorAll('#changes-list .change-row, .file-card').length;
+    return {
+      listCount,
+      changesOpen: !!(changes && !changes.hidden),
+      hasPendingChip: chips.some(text => /pending|menunggu|waiting/i.test(text)),
+    };
+  });
+  check('待发送变更在推送前可见', pendingVisible.listCount >= 2 && (pendingVisible.changesOpen || pendingVisible.hasPendingChip),
+    JSON.stringify(pendingVisible));
+
+  const checkboxCount = await page.locator('.file-card input[type=checkbox], .list-row input[type=checkbox]').count();
+  check('文件可选中', checkboxCount >= 2, `${checkboxCount} 个复选框`);
+
   await clickPush(page);
 
   let links = [];
@@ -149,6 +165,29 @@ async function clickPush(page) {
     await page.waitForTimeout(500);
   }
   check('批量上传两个文件后出现两条结果链接', links.length >= 2, `找到 ${links.length} 条: ${links.join(', ')}`);
+
+  const afterPushState = await page.evaluate(() => {
+    const chips = [...document.querySelectorAll('[data-role="status"]')].map(el => (el.textContent || '').toLowerCase());
+    return {
+      cards: document.querySelectorAll('.file-card, .list-row[data-id]').length,
+      synced: chips.filter(text => /synced|tersimpan/.test(text)).length,
+    };
+  });
+  check('推送成功后文件仍可见且标记为已同步', afterPushState.cards >= 2 && afterPushState.synced >= 1,
+    JSON.stringify(afterPushState));
+
+  const firstCard = page.locator('.file-card, .list-row[data-id]').first();
+  if (await firstCard.count()) {
+    await firstCard.click();
+    const previewOpen = await page.locator('#preview-dialog.open, #preview-dialog:not([hidden])').count();
+    check('点击文件打开预览', previewOpen > 0);
+    const copyBtn = page.locator('#preview-copy');
+    if (await copyBtn.count()) {
+      await copyBtn.click({ timeout: 2000 }).catch(() => {});
+    }
+    await page.keyboard.press('Escape');
+  }
+
   await page.screenshot({ path: path.join(OUT, 'shot-2-uploaded.png'), fullPage: true });
 
   // --- 4. uploaded files are really retrievable and are the bytes we sent

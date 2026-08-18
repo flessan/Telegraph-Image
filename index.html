@@ -78,12 +78,18 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="8.25"/><path d="M12 8v4.4l2.8 1.6"/></svg>
             <span data-i18n="navRecent">Recent</span>
           </button>
+          <button type="button" class="nav-item" data-view="changes">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7h10M5 12h14M5 17h8"/><path d="M17.5 15.5v5M15 18h5"/></svg>
+            <span data-i18n="navChanges">Changes</span>
+            <span class="nav-badge" id="nav-changes-badge" hidden>0</span>
+          </button>
         </nav>
-        <div class="staging-card">
+        <button type="button" class="staging-card" id="staging-card" data-i18n-aria="openChanges">
           <h2 data-i18n="stagingTitle">Ready to send</h2>
           <div class="staging-count" id="staging-count">0</div>
           <p id="staging-copy" data-i18n="stagingEmpty">No pending changes</p>
-        </div>
+          <p class="staging-size" id="staging-size"></p>
+        </button>
         <p class="sidebar-hint" data-i18n="sidebarHint">This browser keeps a local catalog. The public dashboard lists the full remote store when it is enabled.</p>
       </aside>
 
@@ -122,14 +128,31 @@
           </div>
         </div>
 
+        <div id="offline-banner" class="offline-banner" hidden role="status"></div>
         <div id="setup-notice" class="setup-stack" role="status" aria-live="polite"></div>
-        <div id="pending-bar" class="pending-bar" hidden>
-          <div class="grow">
-            <strong id="pending-title"></strong>
-            <span data-i18n="pendingHint">These files are only on this device.</span>
+        <div id="bulk-bar" class="bulk-bar" hidden>
+          <span id="bulk-count"></span>
+          <div class="bulk-actions">
+            <button type="button" class="btn tonal" id="bulk-push" data-i18n="pushSelected">Push selected</button>
+            <button type="button" class="btn outlined" id="bulk-copy" data-i18n="copySelected">Copy selected URLs</button>
+            <button type="button" class="btn outlined" id="bulk-download" data-i18n="downloadSelected">Download selected</button>
+            <button type="button" class="btn text" id="bulk-remove" data-i18n="removeSelected">Remove selected</button>
+            <button type="button" class="btn text" id="bulk-clear" data-i18n="clearSelection">Clear selection</button>
           </div>
-          <button type="button" class="btn text" id="retry-failed" hidden data-i18n="retryFailed">Retry failed</button>
         </div>
+        <section id="changes-panel" class="changes-panel" hidden>
+          <div class="changes-head">
+            <div>
+              <h2 data-i18n="changesTitle">Changes</h2>
+              <p id="changes-summary"></p>
+            </div>
+            <div class="changes-actions">
+              <button type="button" class="btn text" id="clear-pending" data-i18n-aria="clearPendingAria" data-i18n="clearPending">Clear pending</button>
+              <button type="button" class="btn text" id="retry-failed" hidden data-i18n="retryFailed">Retry failed</button>
+            </div>
+          </div>
+          <ul id="changes-list" class="changes-list"></ul>
+        </section>
 
         <div class="browser" id="browser" tabindex="-1">
           <div id="file-stage"></div>
@@ -164,6 +187,7 @@
     </div>
 
     <footer class="status-bar">
+      <span id="status-local"></span>
       <span id="status-files"></span>
       <span id="status-pending"></span>
       <span id="status-failed"></span>
@@ -186,6 +210,10 @@
       <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="8.25"/><path d="M12 8v4.4l2.8 1.6"/></svg></span>
       <span data-i18n="navRecent">Recent</span>
     </button>
+    <button type="button" data-view="changes">
+      <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M5 7h10M5 12h14M5 17h8"/><path d="M17.5 15.5v5M15 18h5"/></svg></span>
+      <span data-i18n="navChanges">Changes</span>
+    </button>
   </nav>
 
   <button type="button" class="fab" id="fab-add" data-i18n-aria="fabAdd">
@@ -199,9 +227,20 @@
   <div class="dialog" id="preview-dialog" role="dialog" aria-modal="true" aria-labelledby="preview-title" hidden>
     <div class="dialog-head">
       <h2 id="preview-title" data-i18n="previewTitle">File preview</h2>
-      <button type="button" class="icon-btn" id="preview-close" data-i18n-aria="previewClose">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
-      </button>
+      <div class="preview-tools">
+        <button type="button" class="icon-btn" id="preview-prev" data-i18n-aria="previewPrev">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M15 6l-6 6 6 6"/></svg>
+        </button>
+        <button type="button" class="icon-btn" id="preview-next" data-i18n-aria="previewNext">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M9 6l6 6-6 6"/></svg>
+        </button>
+        <button type="button" class="icon-btn" id="preview-zoom" data-i18n-aria="previewZoom">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="11" cy="11" r="6"/><path d="M16 16l4 4M11 8v6M8 11h6"/></svg>
+        </button>
+        <button type="button" class="icon-btn" id="preview-close" data-i18n-aria="previewClose">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+      </div>
     </div>
     <div class="preview-layout">
       <div class="preview-stage" id="preview-stage"></div>
@@ -229,6 +268,14 @@
         <button type="button" class="btn outlined" id="confirm-cancel" data-i18n="cancel">Cancel</button>
         <button type="button" class="btn danger" id="confirm-ok" data-i18n="confirmRemove">Remove</button>
       </div>
+    </div>
+  </div>
+
+  <div class="dialog command-dialog" id="command-dialog" role="dialog" aria-modal="true" aria-labelledby="command-title" hidden>
+    <div class="command-shell">
+      <h2 id="command-title" class="sr-only" data-i18n="commandTitle">Commands</h2>
+      <input id="command-input" class="command-input" type="search" autocomplete="off" spellcheck="false" data-i18n-placeholder="commandPlaceholder" data-i18n-aria="commandTitle">
+      <ul id="command-list" class="command-list" role="listbox"></ul>
     </div>
   </div>
 
