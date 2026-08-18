@@ -1,10 +1,8 @@
 import {
-    basicAuthentication,
-    basicAuthChallengeResponse,
-    dashboardDisabledResponse,
-    unauthorizedResponse,
+  dashboardDisabledResponse,
 } from "../../utils/auth.js";
-import { isEmptyBinding } from "../../utils/http.js";
+import { isEmptyBinding, jsonResponse } from "../../utils/http.js";
+import { authenticateRequest, authConfigured } from "../../utils/session.js";
 
 async function errorHandling(context) {
     try {
@@ -14,29 +12,47 @@ async function errorHandling(context) {
     }
   }
 
-  function authentication(context) {
+  async function authentication(context) {
+    const { request, env } = context;
+    const url = new URL(request.url);
+
     if (isEmptyBinding(context.env.img_url)) {
         return dashboardDisabledResponse();
     }
 
-    if (isEmptyBinding(context.env.BASIC_USER)) {
+    // Session plumbing endpoints handle their own authentication and must be
+    // reachable before a session exists.
+    const publicAuthPaths = ['/api/manage/login', '/api/manage/logout', '/api/manage/session'];
+    if (publicAuthPaths.some(p => url.pathname === p || url.pathname.startsWith(p + '/'))) {
+      return context.next();
+    }
+
+    if (!authConfigured(env)) {
+        // No credentials configured — same open behavior as before.
         return context.next();
     }
 
-    if (!context.request.headers.has('Authorization')) {
-        return basicAuthChallengeResponse();
+    const identity = await authenticateRequest(request, env);
+    if (identity) {
+      context.data.session = identity;
+      return context.next();
     }
 
-    const credentials = basicAuthentication(context.request);
-    if (credentials instanceof Response) {
-        return credentials;
-    }
+    const accepts = request.headers.get('Accept') || '';
+    const wantsJson = accepts.includes('application/json') ||
+      url.pathname.startsWith('/api/');
 
-    if (context.env.BASIC_USER !== credentials.user || context.env.BASIC_PASS !== credentials.pass) {
-        return unauthorizedResponse('Invalid credentials.');
+    // Deliberately do NOT send WWW-Authenticate: a challenge would force the
+    // browser's native Basic dialog. The admin GUI handles 401 itself.
+    if (wantsJson) {
+      return jsonResponse({ error: 'unauthenticated' }, {
+        status: 401,
+        headers: { 'Cache-Control': 'no-store' },
+      });
     }
-
-    return context.next();
+    // Browser navigation to a protected page without a session bounces to the
+    // GUI login rather than showing the native credential prompt.
+    return Response.redirect(`${url.origin}/login.html?next=${encodeURIComponent(url.pathname + url.search)}`, 302);
   }
-  
+
   export const onRequest = [errorHandling, authentication];

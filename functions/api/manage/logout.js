@@ -1,13 +1,26 @@
-export async function onRequest(context) {
-    // Contents of context object
-    const {
-      request, // same as existing Worker API
-      env, // same as existing Worker API
-      params, // if filename includes [id] or [[path]]
-      waitUntil, // same as ctx.waitUntil in existing Worker API
-      next, // used for middleware or to fetch assets
-      data, // arbitrary space for passing data between middlewares
-    } = context;
-    return new Response('Logged out.', { status: 401 });
+import { jsonResponse } from "../../utils/http.js";
+import { clearSessionCookie } from "../../utils/session.js";
 
+export async function onRequest(context) {
+  const { request } = context;
+  const url = new URL(request.url);
+
+  if (request.method !== 'POST') {
+    // Legacy browser navigation to /api/manage/logout: clear the cookie and
+    // send the user to the GUI login.
+    return new Response(null, {
+      status: 302,
+      headers: {
+        Location: url.origin + '/login.html',
+        'Set-Cookie': clearSessionCookie(request),
+      },
+    });
   }
+
+  return jsonResponse({ ok: true }, {
+    headers: {
+      'Set-Cookie': clearSessionCookie(request),
+      'Cache-Control': 'no-store',
+    },
+  });
+}
