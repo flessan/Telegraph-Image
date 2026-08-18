@@ -76,6 +76,7 @@ Optional environment variables (enable features as needed, see the [Optional Fea
 |---------------------|---------------------------|----------------------------------------------------------------------------------------|
 | `BASIC_USER`        | `admin`                   | Login username for the dashboard (/admin). Leave unset for a dashboard without login. |
 | `BASIC_PASS`        | `admin-password`          | Login password for the dashboard. Must be set together with `BASIC_USER`.            |
+| `SESSION_SECRET`    | `long-random-string`      | Optional but recommended. Secret used to sign the GUI sign-in session cookie. When unset, it is derived deterministically from `BASIC_USER`/`BASIC_PASS` so existing deployments keep working without configuration; set an explicit random value in production. |
 | `UPLOAD_BASIC_USER` | `uploader`                | Username for protecting the public upload endpoint. Leave unset to keep uploads public. |
 | `UPLOAD_BASIC_PASS` | `strong-password`         | Password for protecting the public upload endpoint. Must be set together with `UPLOAD_BASIC_USER`. |
 | `ENABLE_SHORT_URLS` | `true`                    | When enabled (and a KV namespace is bound), uploads return a short link like `/file/AbC123` instead of the long file name. Existing long links keep working. |
@@ -132,7 +133,7 @@ Disabled by default. To enable: in the Cloudflare Pages backend, click `Settings
 ![](https://im.gurl.eu.org/file/a0c212d5dfb61f3652d07.png)
 ![](https://im.gurl.eu.org/file/48b9316ed018b2cb67cf4.png)
 
-The dashboard supports: total image count, filename search, paginated loading, online preview, rename, blacklist/whitelist management, record deletion, and grid/waterfall views. See the [Update Log](#update-log) for detailed descriptions and screenshots of each feature.
+The dashboard (Remote Storage Console) supports: an at-a-glance overview, filename search, paginated loading, grid/list/masonry views, online preview, a detail side sheet with metadata inspection, copy URL (direct/Markdown/BBCode/HTML), rename, like/save, blacklist/whitelist management, multi-select bulk actions, record deletion, and a keyboard-first command palette. See the [Update Log](#update-log) for detailed descriptions and screenshots of each feature.
 
 Note: the dashboard "delete" action only removes the record from the list; it does not delete the source file from Telegram. To prevent a file from loading, use the blacklist feature.
 
@@ -144,10 +145,11 @@ Disabled by default. To enable, add the following environment variables:
 | ----------- | ----------- |
 | `BASIC_USER` | Dashboard login username |
 | `BASIC_PASS` | Dashboard login password |
+| `SESSION_SECRET` | (Recommended) A long random string used to sign sign-in sessions |
 
-![](https://im.gurl.eu.org/file/dff376498ac87cdb78071.png)
+The admin area ships with a Material 3 sign-in screen at `/login.html`. After signing in, an **HttpOnly, Secure, SameSite=Lax** session cookie is issued (valid for 7 days); credentials are never stored in the browser. If `BASIC_USER` is left unset, the dashboard stays open without a login — this keeps it compatible with Cloudflare Access or any reverse proxy that already authenticates traffic. Set `SESSION_SECRET` to a long random value in production; when it is unset it is derived from `BASIC_USER`/`BASIC_PASS` so upgrades require no new configuration.
 
-Of course, you can also choose not to set these two values, so that accessing the backend management page will not require verification and will skip the login step directly. This design allows you to use it in combination with Cloudflare Access to achieve email verification code login, Microsoft account login, Github account login, and other functions. It can be integrated with the existing login method on your domain without having to remember another set of backend credentials. For adding Cloudflare Access, please refer to the official documentation. Note that the protected path needs to include /admin and /api/manage/\*
+The legacy HTTP Basic scheme is still accepted as a deliberate fallback for scripts and `curl`, but the API no longer sends a `WWW-Authenticate` challenge, so browsers are never prompted with the native credential dialog — the GUI handles sign-in instead. Endpoints: `POST /api/manage/login` (JSON `{user,password}`), `POST /api/manage/logout`, and `GET /api/manage/session`. To front the dashboard with Cloudflare Access, protect both `/admin` and `/api/manage/*`.
 
 ### Upload Protection
 
@@ -294,13 +296,19 @@ npm run test:e2e   # terminal 2
 
 The end-to-end suite covers batch upload, drag-and-drop, file retrieval and Content-Type, all four output formats, the setup self-check notice, and the dashboard; screenshots land in `test/e2e/output/`. Env vars: `E2E_BASE_URL` (default http://localhost:8080) and `E2E_CHROMIUM` (path to a Chromium binary, for environments where Playwright cannot download its own).
 
-> The dashboard (/admin) loads Vue and Element UI from cdn.jsdelivr.net, so it renders blank where that CDN is unreachable — the end-to-end suite detects this and skips the dashboard check instead of failing.
+> The admin console (`/admin`) is a dependency-free static page that shares the Material 3 design system with the homepage, so it renders with no external CDN dependency. The end-to-end suite uses HTTP Basic credentials (`BASIC_USER=admin`/`BASIC_PASS=123` in `npm start`) to pass the management API.
 
 ### Thanks
 
 Ideas and code provided by Hostloc @feixiang and @乌拉擦
 
 ## Update Log
+August 18, 2026 - Material 3 Remote Storage Console & GUI Sign-In
+
+- **Rebuilt the admin dashboard as the Material 3 "Remote Storage Console"** (`/admin`): a concise overview, a remote object browser with grid/list/masonry layouts, search and sorting, paginated load-more, an object-detail side sheet, copy URL in direct/Markdown/BBCode/HTML, rename, like/save, whitelist/blacklist, multi-select bulk actions, broken-link check, a keyboard command palette (⌘K), snackbars/dialogs instead of browser `alert()`/`confirm()`, responsive layouts, and full English/Bahasa Indonesia localization. The legacy Vue 2 + Element UI pages (`admin-imgtc`, `admin-waterfall`) are removed; their real capabilities were migrated.
+- **Proper GUI sign-in** at `/login.html` with username/password fields, show/hide password, loading/validation/error states, theme and language support. Sessions use an HMAC-signed **HttpOnly, Secure, SameSite** cookie (7 days); no credentials or tokens are stored in `localStorage`. New minimal auth endpoints: `POST /api/manage/login`, `POST /api/manage/logout`, `GET /api/manage/session`. HTTP Basic remains accepted as a fallback for scripts/curl but no longer triggers the browser's native credential dialog. Optional `SESSION_SECRET` env var signs sessions (derived from `BASIC_USER`/`BASIC_PASS` when unset). No new account system — upload, storage, Telegram/R2, file serving, and public URLs are unchanged.
+- **Shared design foundation** (`/css/app.css`): Material 3 color tokens, typography, spacing, elevation, motion, and reusable buttons/fields/dialogs/sheets/snackbars/menus/command palette used by both the public workspace and the admin console.
+
 July 19, 2026 - Pluggable Storage & Review, New Homepage, Anti-Hotlinking
 
 - **Image review is now pluggable**, with a new built-in provider based on Cloudflare Workers AI (bind `AI`, no external account needed) — moderatecontent.com has stopped accepting registrations and its provider is kept for legacy keys only; review verdicts are now cached per file, so each file is reviewed at most once (#203/#196/#174/#166/#85/#49)

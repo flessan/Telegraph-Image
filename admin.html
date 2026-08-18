@@ -1,360 +1,171 @@
-<!DOCTYPE html>
-<html>
-
+<!doctype html>
+<html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <!-- import CSS -->
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/element-ui@2.15.3/lib/theme-chalk/index.css"
-    integrity="sha256-ghr1zmXTODLKl1HULQd6fq1MIe7m3FJiNTOCT8sddLM=" crossorigin="anonymous">
-  <style>
-    .el-image__inner.el-image__inner {
-      width: 100%;
-      height: 90px;
-    }
-
-    .el-image {
-      text-align: center;
-    }
-
-    .el-button+.el-button {
-      margin: 0;
-    }
-  </style>
-  <script src="https://js.sentry-cdn.com/219f636ac7bde5edab2c3e16885cb535.min.js" crossorigin="anonymous"></script>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <meta name="robots" content="noindex,nofollow">
+  <link rel="icon" type="image/x-icon" href="/favicon.ico">
+  <title>Remote Storage Console · Telegraph-Image</title>
+  <link rel="stylesheet" href="/css/app.css">
+  <link rel="stylesheet" href="/css/admin.css">
 </head>
+<body class="console-body">
+  <a class="skip-link" href="#browser" data-i18n="skipToContent">Skip to files</a>
 
-<body>
-  <div id="app">
-    <el-container>
-      <el-header>
-        <div style="
-         margin: auto;
-         line-height: 60px;
-         font-size: xx-large;
-         position: relative;
-     ">Dashboard
+  <div class="console" id="console">
+    <header class="console-header">
+      <button class="icon-btn mobile-nav-toggle" id="nav-toggle" data-i18n-aria="adminNavAria">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+      </button>
+      <a class="brand" href="/admin.html">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3.5" y="8.5" width="13" height="12" rx="2"/>
+            <path d="M7.5 8.5V6.2A2.2 2.2 0 0 1 9.7 4h10.1A1.7 1.7 0 0 1 21.5 5.7v10.6a2.2 2.2 0 0 1-2.2 2.2H16.5"/>
+          </svg>
+        </span>
+        <span class="brand-text">
+          <span class="brand-name" data-i18n="adminTitle">Remote Storage Console</span>
+          <span class="brand-tag" data-i18n="adminTagline">Manage the remote object store</span>
+        </span>
+      </a>
 
+      <div class="header-search">
+        <span class="search-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="11" cy="11" r="6.25"/><path d="M16 16l4 4"/></svg>
+        </span>
+        <input id="search" type="search" autocomplete="off" spellcheck="false"
+               data-i18n-placeholder="consoleSearchPlaceholder" data-i18n-aria="adminSearchAria" placeholder="Search objects">
+        <button type="button" class="icon-btn search-clear" id="search-clear" hidden data-i18n-aria="clearSearch">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+      </div>
 
-          <span style="
-     position: absolute;
-     right: 0px;
-      ">
-            <a href="./admin-imgtc.html">
-              <el-button size="mini" type="warning">网格视图</el-button>
-            </a>
-            <a href="./admin-waterfall.html">
-              <el-button size="mini" type="primary">瀑布流</el-button>
-            </a>
-            <el-button v-if="showLogoutButton" size="mini" type="info" @click="handleLogout()">退出登录</el-button></span>
-        </div>
-      </el-header>
-      <el-main><el-row :gutter="12">
-          <el-col :span="24">
-            <el-card shadow="always">
-              记录总数量:
-              {{ Number }}
-            </el-card>
-          </el-col>
-          <!--<el-col :span="8">
-              <el-card shadow="hover">
-                <el-tooltip class="item" effect="dark" content="白名单数量" placement="top-start">
-                   
-                </el-tooltip>
-                白名单数量：{{ WhiteList }}
-              </el-card>
-            </el-col>
-            <el-col :span="8">
-              <el-card shadow="hover">
-                <el-tooltip class="item" effect="dark" content="黑名单数量" placement="top-start">
-                
-              </el-tooltip>
-              黑名单数量：{{ BlackList }}
-              </el-card>
-            </el-col>-->
-        </el-row>
-        <template>
-          <el-table :data="tableData.filter(data => !search || data.name.toLowerCase().includes(search.toLowerCase()))"
-            style="width: 100%">
-            <el-table-column label="name" prop="name">
-            </el-table-column>
-            <el-table-column label="preview" prop="preview" align="center">
-              <template slot-scope="scope">
-                <video v-if="scope.row.name.indexOf('.mp4')>0" style="width: 100%; height: 180px;" controls>
-                  <source :src="'/file/'+scope.row.name" type="video/mp4">
-                </video>
-                <el-image v-else style="width: 100%; height: 100%;" :src="'/file/'+scope.row.name" :zoom-rate="1.2"
-                  :preview-src-list="['/file/'+scope.row.name]" fit="cover" lazy />
+      <div class="header-tools" role="toolbar" data-i18n-aria="utilities">
+        <button class="icon-btn" id="refresh-btn" data-i18n-aria="refreshAria" data-i18n-title="refreshRemote" title="">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 1 1-2.2-5.5"/><path d="M20 4v5h-5"/></svg>
+        </button>
+        <button class="icon-btn hide-phone" id="palette-btn" data-i18n-aria="commandTitle" title="⌘K">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M9 9h6M9 12h6M9 15h4"/><rect x="3" y="4" width="18" height="16" rx="3"/></svg>
+        </button>
+        <button class="icon-btn" id="theme-btn" data-i18n-aria="themeToggleAria" aria-pressed="false">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 3v2M12 19v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M3 12h2M19 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+        </button>
+        <button class="icon-btn hide-phone" id="lang-btn" data-i18n-aria="languageAria" data-i18n-title="language">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.6 3 3.9 6 3.9 9s-1.3 6-3.9 9c-2.6-3-3.9-6-3.9-9S9.4 6 12 3z"/></svg>
+        </button>
+        <a class="icon-btn" href="/" data-i18n-aria="returnHome" data-i18n-title="returnHome">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-7 9 7v9a2 2 0 0 1-2 2h-4v-6H9v6H5a2 2 0 0 1-2-2z"/></svg>
+        </a>
+      </div>
+    </header>
 
-              </template>
-            </el-table-column>
-            <el-table-column label="data" prop="data">
-              <template slot-scope="scope">
-                <el-popover trigger="hover" placement="top">
-                  <p>{{ scope.row.metadata }}</p>
-                  <div slot="reference" class="name-wrapper">
-                    <el-tag size="medium">{{ scope.row.metadata }}</el-tag>
-                  </div>
-                </el-popover>
-              </template>
-            </el-table-column>
-            <el-table-column align="right">
-              <template slot="header" slot-scope="scope">
-                <el-input v-model="search" @input="handleSearch" size="mini" placeholder="输入关键字搜索" />
-              </template>
-              <template slot-scope="scope">
-                <el-button size="mini" type="primary" @click="handleCopy(scope.$index,scope.row.name)">复制地址</el-button>
-                <el-button size="mini" type="primary" @click="handleWhite(scope.$index,scope.row.name)">白名单</el-button>
-                <el-button size="mini" type="info" @click="handleBlock(scope.$index,scope.row.name)">黑名单</el-button>
-                <el-button size="mini" type="danger" @click="handleDelete(scope.$index,scope.row.name)">删除记录</el-button>
-              </template>
-            </el-table-column>
-            </el-table>
-            <el-button v-if="nextCursor" style="margin-top:16px" @click="loadMore">加载更多</el-button>
-          </template>
-        </el-main>
-    </el-container>
+    <nav class="console-nav" id="side-nav" aria-label="Console navigation">
+      <span class="nav-section-label" data-i18n="consoleOverview">Overview</span>
+      <button class="nav-item" data-view="overview" aria-current="page">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.5"/></svg>
+        <span data-i18n="consoleOverview">Overview</span>
+      </button>
+
+      <span class="nav-section-label" data-i18n="navAllFiles">All files</span>
+      <button class="nav-item" data-view="all">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M4 7.5A2.5 2.5 0 0 1 6.5 5H10l2 2h5.5A2.5 2.5 0 0 1 20 9.5v8A2.5 2.5 0 0 1 17.5 20h-11A2.5 2.5 0 0 1 4 17.5v-10z"/></svg>
+        <span data-i18n="navAllFiles">All files</span>
+        <span class="nav-count" id="count-all">0</span>
+      </button>
+      <button class="nav-item" data-view="images">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="17" height="14" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M3.8 16.5l4.4-4.2 3.1 3 2.4-2.3 6.3 5.3"/></svg>
+        <span data-i18n="navImages">Images</span>
+        <span class="nav-count" id="count-images">0</span>
+      </button>
+      <button class="nav-item" data-view="recent">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="8.25"/><path d="M12 8v4.4l2.8 1.6"/></svg>
+        <span data-i18n="navRecent">Recent</span>
+      </button>
+
+      <span class="nav-section-label" data-i18n="metaModeration">Moderation</span>
+      <button class="nav-item" data-view="whitelist">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 3v6c0 5-3.4 8-8 9-4.6-1-8-4-8-9V6z"/><path d="M9 12l2 2 4-4"/></svg>
+        <span data-i18n="navWhitelist">Whitelist</span>
+        <span class="nav-count" id="count-white">0</span>
+      </button>
+      <button class="nav-item" data-view="blacklist">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M5.6 5.6l12.8 12.8"/></svg>
+        <span data-i18n="navBlacklist">Blacklist</span>
+        <span class="nav-count" id="count-block">0</span>
+      </button>
+
+      <div class="nav-footer">
+        <button class="btn btn-outlined btn-block" id="logout-btn">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3"/><path d="M10 17l-5-5 5-5M5 12h12"/></svg>
+          <span data-i18n="logout">Sign out</span>
+        </button>
+      </div>
+    </nav>
+
+    <main class="console-main" id="main">
+      <!-- rendered by admin.js -->
+    </main>
+
+    <footer class="console-footer" id="footer">
+      <span id="footer-status"></span>
+      <span class="spacer"></span>
+      <span id="footer-index"></span>
+    </footer>
   </div>
+
+  <!-- backdrop for mobile nav + sheets -->
+  <div class="sheet-backdrop" id="backdrop" hidden></div>
+
+  <!-- Detail side sheet -->
+  <aside class="sheet is-admin" id="detail-sheet" role="dialog" aria-modal="true" aria-labelledby="detail-title" hidden>
+    <div class="sheet-header">
+      <button class="icon-btn" id="detail-close" data-i18n-aria="closeDetails">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+      <h2 id="detail-title" data-i18n="detailsTitle">Object details</h2>
+    </div>
+    <div class="sheet-body" id="detail-body"></div>
+    <div class="sheet-actions" id="detail-actions"></div>
+  </aside>
+
+  <!-- Generic dialog -->
+  <div class="scrim" id="dialog-scrim" hidden></div>
+  <div class="dialog" id="dialog" role="dialog" aria-modal="true" aria-labelledby="dialog-title" hidden>
+    <h2 id="dialog-title"></h2>
+    <p id="dialog-body"></p>
+    <div id="dialog-extra"></div>
+    <div class="dialog-actions" id="dialog-actions"></div>
+  </div>
+
+  <!-- Rename dialog host -->
+  <template id="rename-template">
+    <label class="field" for="rename-input">
+      <span class="field-label" data-i18n="renamePrompt">Display filename</span>
+      <input class="field-control" id="rename-input" type="text" maxlength="64" autocomplete="off">
+      <span class="field-error" id="rename-error"></span>
+    </label>
+  </template>
+
+  <!-- Command palette -->
+  <div class="scrim" id="palette-scrim" hidden></div>
+  <div class="palette" id="palette" role="dialog" aria-modal="true" aria-labelledby="palette-title" hidden>
+    <h2 id="palette-title" class="sr-only" data-i18n="commandTitle">Commands</h2>
+    <input id="palette-input" type="text" autocomplete="off" spellcheck="false"
+           data-i18n-placeholder="commandPlaceholder" placeholder="Type a command">
+    <div class="palette-results" id="palette-results" role="listbox"></div>
+  </div>
+
+  <!-- Snackbar -->
+  <div class="snackbar" id="snackbar" role="status" aria-live="polite">
+    <span id="snackbar-text"></span>
+    <button class="snackbar-action" id="snackbar-action" hidden></button>
+  </div>
+
+  <!-- Live region for a11y announcements -->
+  <div id="live" class="sr-only" aria-live="polite"></div>
+
+  <script type="module" src="/js/admin.js"></script>
 </body>
-<!-- import Vue before Element -->
-<script src="https://cdn.jsdelivr.net/npm/vue@2.6.14/dist/vue.min.js"
-  integrity="sha256-kXTEJcRFN330VirZFl6gj9+UM6gIKW195fYZeR3xDhc=" crossorigin="anonymous"></script>
-<!-- import JavaScript -->
-<script src="https://cdn.jsdelivr.net/npm/element-ui@2.15.3/lib/index.js"
-  integrity="sha256-OFVFYfqhQ9nDnKh+NfIsefpy/fnjTwkK909ZYgo45nw=" crossorigin="anonymous"></script>
-<script>
-  var app = new Vue({
-    el: '#app',
-    data: {
-      Number: 0,
-      WhiteList: 0,
-        BlackList: 0,
-        showLogoutButton: false,
-        tableData: [],
-        nextCursor: null,
-      dialogFormVisible: false,
-      formLabelWidth: '120px',
-      form: {
-        name: '',
-        id: ''
-      },
-      search: '',
-      password: '123456',
-      searchTimer: null
-    },
-    methods: {
-      handleBlock(index, key) {
-        console.log(key);
-        if (confirm("确认加入黑名单吗?")) {
-          console.log("Yes")
-          var requestOptions = {
-            method: 'GET',
-            redirect: 'follow',
-            //include authorization credientials
-            credentials: 'include'
-          };
-
-          fetch("./api/manage/block/" + key, requestOptions)
-            .then(response => response.text())
-            .then(result => {
-              console.log(result);
-              this.tableData[index].metadata = result;
-            })
-            .catch(error => { alert("An error occurred while synchronizing data with the server, please check the network connection"); console.log('error', error) });
-
-        } else {
-          console.log("No")
-        }
-      },
-      handleDelete(index, key) {
-        console.log(key);
-        if (confirm("确认从后台列表删除该记录吗？这不会删除源文件；如需禁止访问请加入黑名单。")) {
-          console.log("Yes")
-          var requestOptions = {
-            method: 'GET',
-            redirect: 'follow',
-            //include authorization credientials
-            credentials: 'include'
-          };
-
-          fetch("./api/manage/delete/" + key, requestOptions)
-            .then(response => response.text())
-            .then(result => { console.log(result); this.tableData.remove(index); })
-            .catch(error => { alert("An error occurred while synchronizing data with the server, please check the network connection"); console.log('error', error) });
-
-        } else {
-          console.log("No")
-        }
-      },
-      handleWhite(index, key) {
-        console.log(key);
-        if (confirm("确认加入白名单吗?")) {
-          console.log("Yes")
-          var requestOptions = {
-            method: 'GET',
-            redirect: 'follow',
-            //include authorization credientials
-            credentials: 'include'
-          };
-          fetch("./api/manage/white/" + key, requestOptions)
-            .then(response => response.text())
-            .then(result => { console.log(result); this.tableData[index].metadata = result; })
-            .catch(error => { alert("An error occurred while synchronizing data with the server, please check the network connection"); console.log('error', error) });
-
-        } else {
-          console.log("No")
-        }
-
-      },
-      handleLogout() {
-        window.location.href = "./api/manage/logout";
-      },
-      handleCopy(index, key) {
-        const row = this.tableData.find(item => item.name === key);
-        const shortId = row && row.metadata && row.metadata.shortId;
-        const text = `${document.location.origin}/file/${shortId || key}`;
-        if (navigator.clipboard) {
-          // clipboard api 复制
-          navigator.clipboard.writeText(text);
-        } else {
-          const textarea = document.createElement('textarea');
-          document.body.appendChild(textarea);
-          // 隐藏此输入框
-          textarea.style.position = 'fixed';
-          textarea.style.clip = 'rect(0 0 0 0)';
-          textarea.style.top = '10px';
-          // 赋值
-          textarea.value = text;
-          // 选中
-          textarea.select();
-          // 复制
-          document.execCommand('copy', true);
-          // 移除输入框
-          document.body.removeChild(textarea);
-        }
-        this.$message({
-          message: '复制文件链接成功~',
-          type: 'success'
-        });
-      },
-      handleSearch() {
-        clearTimeout(this.searchTimer);
-        this.searchTimer = setTimeout(() => {
-          this.tableData = [];
-          this.nextCursor = null;
-          const opts = { method: 'GET', redirect: 'follow', credentials: 'include' };
-          const base = this.search
-            ? `./api/manage/list?limit=100&prefix=${encodeURIComponent(this.search)}`
-            : `./api/manage/list?limit=100`;
-          fetch(base, opts)
-            .then(r => r.json())
-            .then(result => {
-              this.tableData = result.keys || [];
-              this.nextCursor = result.list_complete ? null : result.cursor;
-              this.Number = this.tableData.length;
-            })
-            .catch(() => alert("搜索失败，请检查网络"));
-        }, 300);
-      },
-      loadMore() {
-        const opts = { method: 'GET', redirect: 'follow', credentials: 'include' };
-        const base = this.search
-          ? `./api/manage/list?limit=100&prefix=${encodeURIComponent(this.search)}`
-          : `./api/manage/list?limit=100`;
-        const url = this.nextCursor
-          ? `${base}&cursor=${encodeURIComponent(this.nextCursor)}`
-          : base;
-
-        fetch(url, opts)
-          .then(r => r.json())
-          .then(result => {
-            this.tableData = this.tableData.concat(result.keys || []);
-            this.nextCursor = result.list_complete ? null : result.cursor;
-            this.Number = this.tableData.length;
-          })
-          .catch(() => alert("同步失败，请检查网络"));
-      },
-    },
-
-    mounted() {
-      //check if the user is logged in
-      //read the basic auth credientials from the browser
-      var requestOptions = {
-        method: 'GET',
-        redirect: 'follow',
-        //include authorization credientials
-        credentials: 'include'
-      };
-      fetch("./api/manage/check", requestOptions)
-        .then(response => response.text())
-        .then(result => {
-          console.log(result);
-          if (result == "true") {
-            this.showLogoutButton = true;
-          } else if (result == "Not using basic auth.") {
-
-          }
-          else {
-            window.location.href = "./api/manage/login";
-          }
-        })
-        .catch(error => { alert("An error occurred while synchronizing data with the server, please check the network connection"); console.log('error', error) });
-
-
-
-      Array.prototype.remove = function (from, to) {
-        var rest = this.slice((to || from) + 1 || this.length);
-        this.length = from < 0 ? this.length + from : from;
-        return this.push.apply(this, rest);
-      };
-      var requestOptions = {
-        method: 'GET',
-        redirect: 'follow',
-        //include authorization credientials
-        credentials: 'include'
-
-      };
-
-
-        fetch("./api/manage/list?limit=100", requestOptions)
-        //判断是否需要登录
-        .then(response => {
-          if (response.status == 401) {
-            alert("请先登录");
-            window.location.href = "./api/manage/login";
-          }
-          else {
-            return response;
-          }
-        })
-        .then(response => response.json())
-        .then(result => {
-          this.tableData = result.keys || [];
-          this.nextCursor = result.list_complete ? null : result.cursor;
-          console.log(result);
-          this.Number = this.tableData.length;
-        })
-        .catch(error => { alert("An error occurred while synchronizing data with the server, please check the network connection"); console.log('error', error) });
-
-    }
-  })
-
-</script><!-- Hotjar Tracking Code -->
-<script>
-    (function (h, o, t, j, a, r) {
-      h.hj = h.hj || function () { (h.hj.q = h.hj.q || []).push(arguments) };
-      h._hjSettings = { hjid: 2531461, hjsv: 6 };
-      a = o.getElementsByTagName('head')[0];
-      r = o.createElement('script'); r.async = 1;
-      r.src = t + h._hjSettings.hjid + j + h._hjSettings.hjsv;
-      a.appendChild(r);
-    })(window, document, 'https://static.hotjar.com/c/hotjar-', '.js?sv=');
-</script>
-<script type="text/javascript">
-  (function (c, l, a, r, i, t, y) {
-    c[a] = c[a] || function () { (c[a].q = c[a].q || []).push(arguments) };
-    t = l.createElement(r); t.async = 1; t.src = "https://www.clarity.ms/tag/" + i;
-    y = l.getElementsByTagName(r)[0]; y.parentNode.insertBefore(t, y);
-  })(window, document, "clarity", "script", "7t5ai7agat");
-</script>
-
 </html>

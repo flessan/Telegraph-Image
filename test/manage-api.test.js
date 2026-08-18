@@ -181,7 +181,7 @@ describe('manage API authentication middleware', function () {
     return mod.onRequest[1];
   }
 
-  it('blocks dashboard requests when basic auth is configured and absent', async function () {
+  it('blocks dashboard API requests with a 401 JSON response (no native Basic challenge)', async function () {
     const authentication = await getAuthentication();
     const img_url = createMockKV();
 
@@ -191,10 +191,14 @@ describe('manage API authentication middleware', function () {
     }));
 
     assert.strictEqual(res.status, 401);
-    assert.strictEqual(res.headers.get('WWW-Authenticate'), 'Basic realm="my scope", charset="UTF-8"');
+    assert.strictEqual(res.headers.get('Content-Type'), 'application/json');
+    // No WWW-Authenticate so the browser never shows its native dialog.
+    assert.strictEqual(res.headers.get('WWW-Authenticate'), null);
+    const body = JSON.parse(await res.text());
+    assert.strictEqual(body.error, 'unauthenticated');
   });
 
-  it('allows dashboard requests with valid basic auth credentials', async function () {
+  it('allows dashboard requests with valid basic auth credentials (migration fallback)', async function () {
     const authentication = await getAuthentication();
     const img_url = createMockKV();
     const headers = new Headers({
@@ -209,6 +213,36 @@ describe('manage API authentication middleware', function () {
 
     assert.strictEqual(res.status, 200);
     assert.strictEqual(await res.text(), 'ok');
+  });
+
+  it('permits unauthenticated requests to the login/logout/session endpoints', async function () {
+    const authentication = await getAuthentication();
+    const img_url = createMockKV();
+
+    for (const path of ['/api/manage/login', '/api/manage/logout', '/api/manage/session']) {
+      const res = await authentication(makeContext({
+        env: { img_url, BASIC_USER: 'admin', BASIC_PASS: 'secret' },
+        request: new Request(`https://example.com${path}`),
+        next: async () => new Response('open'),
+      }));
+      assert.strictEqual(res.status, 200, `${path} should be public`);
+      assert.strictEqual(await res.text(), 'open');
+    }
+  });
+
+  it('redirects unauthenticated browser navigation (non-API) to the GUI login', async function () {
+    const authentication = await getAuthentication();
+    const img_url = createMockKV();
+
+    const res = await authentication(makeContext({
+      env: { img_url, BASIC_USER: 'admin', BASIC_PASS: 'secret' },
+      request: new Request('https://example.com/admin.html', {
+        headers: { Accept: 'text/html' },
+      }),
+    }));
+
+    assert.strictEqual(res.status, 302);
+    assert.ok(res.headers.get('Location').includes('/login.html'));
   });
 
   it('returns the dashboard disabled message when KV is not bound', async function () {

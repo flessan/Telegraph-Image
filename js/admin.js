@@ -1,0 +1,1210 @@
+import {
+  applyStaticI18n, detectLanguage, getLanguage, initI18n,
+  onLanguageChange, setLanguage, t,
+} from './i18n.js';
+
+/* ------------------------------------------------------------------ *
+ * Remote Storage Console
+ * Vanilla JS, Material 3-inspired. Talks to the existing manage API.
+ * ------------------------------------------------------------------ */
+
+const PREFS_KEY = 'ti.prefs';
+const PAGE_SIZE = 100;
+const RECENT_LIMIT = 8;
+const IMAGE_EXTS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'tiff', 'tif', 'ico', 'svg', 'avif'];
+const VIDEO_EXTS = ['mp4', 'webm', 'ogg', 'mov', 'm4v', 'avi', 'mkv'];
+const AUDIO_EXTS = ['mp3', 'wav', 'ogg', 'flac', 'aac', 'm4a', 'wma'];
+
+const state = {
+  ready: false,
+  authEnabled: true,
+  objects: [],          // loaded objects { name, metadata, _kind }
+  cursor: undefined,
+  listComplete: false,
+  loading: false,
+  loadError: false,
+  view: 'overview',    // overview | all | images | recent | whitelist | blacklist
+  layout: 'grid',      // grid | list | waterfall
+  sort: 'dateDesc',
+  query: '',
+  selected: new Set(),
+  detailId: null,
+  theme: 'light',
+  brokenChecking: false,
+};
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => (
+  { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+));
+
+/* ----------------------------- prefs ----------------------------- */
+function loadPrefs() {
+  try { return JSON.parse(localStorage.getItem(PREFS_KEY) || '{}') || {}; } catch (_) { return {}; }
+}
+function savePrefs(patch) {
+  try {
+    const cur = loadPrefs();
+    localStorage.setItem(PREFS_KEY, JSON.stringify({ ...cur, ...patch }));
+  } catch (_) { /* ignore */ }
+}
+function detectTheme(prefs) {
+  if (prefs.theme === 'light' || prefs.theme === 'dark') return prefs.theme;
+  return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+}
+function applyTheme() {
+  document.documentElement.dataset.theme = state.theme;
+  const btn = $('theme-btn');
+  if (btn) {
+    btn.setAttribute('aria-pressed', String(state.theme === 'dark'));
+    btn.setAttribute('aria-label', t(state.theme === 'dark' ? 'themeDark' : 'themeLight'));
+    btn.setAttribute('title', t(state.theme === 'dark' ? 'themeDark' : 'themeLight'));
+  }
+}
+
+/* --------------------------- formatting -------------------------- */
+function extOf(name) {
+  const i = (name || '').lastIndexOf('.');
+  return i >= 0 ? name.slice(i + 1).toLowerCase() : '';
+}
+function kindOf(name) {
+  const e = extOf(name);
+  if (IMAGE_EXTS.includes(e)) return 'image';
+  if (VIDEO_EXTS.includes(e)) return 'video';
+  if (AUDIO_EXTS.includes(e)) return 'audio';
+  return 'document';
+}
+function kindLabel(kind) {
+  return t({ image: 'typeImage', video: 'typeVideo', audio: 'typeAudio', document: 'typeDocument' }[kind] || 'typeFile');
+}
+function formatBytes(bytes) {
+  const n = Number(bytes) || 0;
+  if (n < 1024) return t('bytes', { n });
+  if (n < 1024 * 1024) return t('kb', { n: (n / 1024).toFixed(n < 10 * 1024 ? 1 : 0) });
+  if (n < 1024 * 1024 * 1024) return t('mb', { n: (n / 1024 / 1024).toFixed(2) });
+  return t('gb', { n: (n / 1024 / 1024 / 1024).toFixed(2) });
+}
+function formatWhen(ts) {
+  if (!ts) return '—';
+  const delta = Date.now() - Number(ts);
+  if (delta < 60 * 1000) return t('justNow');
+  if (delta < 60 * 60 * 1000) return t('minutesAgo', { n: Math.floor(delta / 60000) });
+  if (delta < 24 * 60 * 60 * 1000) return t('hoursAgo', { n: Math.floor(delta / 3600000) });
+  if (delta < 7 * 24 * 60 * 60 * 1000) return t('daysAgo', { n: Math.floor(delta / 86400000) });
+  try { return new Date(Number(ts)).toLocaleString(getLanguage()); } catch (_) { return new Date(Number(ts)).toLocaleString(); }
+}
+function fullDate(ts) {
+  if (!ts) return '—';
+  try { return new Date(Number(ts)).toLocaleString(getLanguage()); } catch (_) { return String(ts); }
+}
+function publicUrl(obj) {
+  const shortId = obj.metadata?.shortId;
+  return `${window.location.origin}/file/${shortId || obj.name}`;
+}
+
+/* --------------------------- feedback ---------------------------- */
+let snackTimer = null;
+function announce(msg) { const live = $('live'); if (live) live.textContent = msg; }
+function snackbar(message, { action, onAction, isError } = {}) {
+  const el = $('snackbar');
+  $('snackbar-text').textContent = message;
+  const act = $('snackbar-action');
+  if (action) {
+    act.hidden = false;
+    act.textContent = action;
+    act.onclick = () => { onAction?.(); el.classList.remove('show'); };
+  } else {
+    act.hidden = true;
+    act.onclick = null;
+  }
+  el.classList.toggle('is-error', !!isError);
+  el.classList.add('show');
+  clearTimeout(snackTimer);
+  snackTimer = setTimeout(() => el.classList.remove('show'), 3600);
+  announce(message);
+}
+
+/* ----------------------------- API ------------------------------- */
+async function api(path, options = {}) {
+  const res = await fetch(path, {
+    credentials: 'same-origin',
+    redirect: 'manual',
+    headers: { 'Accept': 'application/json', ...(options.headers || {}) },
+    ...options,
+  });
+  if (res.type === 'opaqueredirect' || [301, 302, 303, 307, 308].includes(res.status)) {
+    throw new AuthError('session_redirect');
+  }
+  if (res.status === 401) throw new AuthError('unauthenticated');
+  return res;
+}
+class AuthError extends Error {}
+
+async function checkSession() {
+  try {
+    const res = await api('/api/manage/session');
+    if (res.ok) return res.json();
+  } catch (err) {
+    if (err instanceof AuthError) throw err;
+    // network issue — don't bounce, let load retry surface it.
+  }
+  throw new AuthError('unauthenticated');
+}
+
+async function loadPage(reset = false) {
+  if (state.loading) return;
+  if (!reset && state.listComplete) return;
+  state.loading = true;
+  state.loadError = false;
+  renderChrome();
+  try {
+    const params = new URLSearchParams({ limit: String(PAGE_SIZE) });
+    if (!reset && state.cursor) params.set('cursor', state.cursor);
+    const res = await api(`/api/manage/list?${params}`);
+    if (!res.ok) throw new Error('http ' + res.status);
+    const data = await res.json();
+    const incoming = (data.keys || []).map(k => ({
+      name: k.name,
+      metadata: normalizeMeta(k.metadata, k.name),
+      _kind: kindOf(k.name),
+    }));
+    state.objects = reset ? incoming : mergeObjects(state.objects, incoming);
+    state.cursor = data.list_complete ? undefined : data.cursor;
+    state.listComplete = !!data.list_complete;
+    state.ready = true;
+  } catch (err) {
+    state.loadError = true;
+    if (err instanceof AuthError) return handleSessionExpired();
+    snackbar(t('loadFailedTitle'), { action: t('retry'), onAction: () => loadPage(reset), isError: true });
+  } finally {
+    state.loading = false;
+    render();
+  }
+}
+
+function normalizeMeta(meta, name) {
+  meta = meta || {};
+  return {
+    ListType: meta.ListType || 'None',
+    Label: meta.Label || 'None',
+    TimeStamp: meta.TimeStamp || 0,
+    liked: !!meta.liked,
+    fileName: meta.fileName || name,
+    fileSize: meta.fileSize || 0,
+    shortId: meta.shortId || undefined,
+    provider: meta.provider || undefined,
+    ...meta,
+  };
+}
+
+function mergeObjects(existing, incoming) {
+  const map = new Map();
+  for (const o of existing) map.set(o.name, o);
+  for (const o of incoming) map.set(o.name, { ...(map.get(o.name) || {}), ...o });
+  return Array.from(map.values());
+}
+
+function upsertObject(name, patch) {
+  const idx = state.objects.findIndex(o => o.name === name);
+  if (idx >= 0) state.objects[idx] = { ...state.objects[idx], ...patch, metadata: { ...state.objects[idx].metadata, ...(patch.metadata || {}) } };
+}
+function removeObject(name) {
+  state.objects = state.objects.filter(o => o.name !== name);
+  state.selected.delete(name);
+}
+
+async function runAction(name, url, { method = 'GET', body } = {}) {
+  const res = await api(url, { method, body });
+  if (!res.ok) throw new Error('http ' + res.status);
+  const ct = res.headers.get('Content-Type') || '';
+  return ct.includes('json') ? res.json() : res.text();
+}
+
+/* ------------------------ session / auth ------------------------- */
+function handleSessionExpired() {
+  const next = encodeURIComponent('/admin.html');
+  // Preserve a one-time message across the redirect via sessionStorage.
+  try { sessionStorage.setItem('ti.session-expired', '1'); } catch (_) { /* ignore */ }
+  window.location.href = `/login.html?next=${next}`;
+}
+async function logout() {
+  try { await api('/api/manage/logout', { method: 'POST' }); } catch (_) { /* ignore */ }
+  window.location.href = '/login.html';
+}
+
+/* --------------------------- clipboard --------------------------- */
+function copyText(text, successMsg) {
+  const ok = () => snackbar(successMsg || t('copySuccess'));
+  const fail = () => snackbar(t('copyFailed'), { isError: true });
+  if (!text) return fail();
+  if (navigator.clipboard?.writeText) {
+    navigator.clipboard.writeText(text).then(ok, () => legacyCopy(text) ? ok() : fail());
+  } else {
+    legacyCopy(text) ? ok() : fail();
+  }
+}
+function legacyCopy(text) {
+  const ta = document.createElement('textarea');
+  ta.value = text; ta.setAttribute('readonly', '');
+  ta.style.position = 'fixed'; ta.style.opacity = '0';
+  document.body.appendChild(ta); ta.select();
+  let ok = false;
+  try { ok = document.execCommand('copy'); } catch (_) { ok = false; }
+  document.body.removeChild(ta); return ok;
+}
+function linkFor(obj, format) {
+  const url = publicUrl(obj);
+  const label = esc(obj.metadata?.fileName || obj.name);
+  switch (format) {
+    case 'markdown': return `![${obj.metadata?.fileName || obj.name}](${url})`;
+    case 'bbcode': return `[img]${url}[/img]`;
+    case 'html': return `<img src="${url}" alt="${label}">`;
+    default: return url;
+  }
+}
+
+/* --------------------------- filtering --------------------------- */
+function viewPredicate() {
+  switch (state.view) {
+    case 'images': return (o) => o._kind === 'image' || o._kind === 'video';
+    case 'recent': return () => true; // handled by sort/limit
+    case 'whitelist': return (o) => o.metadata?.ListType === 'White';
+    case 'blacklist': return (o) => o.metadata?.ListType === 'Block' || o.metadata?.Label === 'adult';
+    default: return () => true;
+  }
+}
+function filteredObjects() {
+  const pred = viewPredicate();
+  const q = state.query.trim().toLowerCase();
+  let list = state.objects.filter(o => {
+    if (!pred(o)) return false;
+    if (!q) return true;
+    return (
+      (o.name || '').toLowerCase().includes(q) ||
+      (o.metadata?.fileName || '').toLowerCase().includes(q) ||
+      extOf(o.name).includes(q)
+    );
+  });
+  list = sortObjects(list);
+  if (state.view === 'recent') list = list.slice(0, 30);
+  return list;
+}
+function sortObjects(list) {
+  const sorted = list.slice();
+  sorted.sort((a, b) => {
+    switch (state.sort) {
+      case 'nameAsc': return a.name.localeCompare(b.name);
+      case 'nameDesc': return b.name.localeCompare(a.name);
+      case 'sizeDesc': return (b.metadata?.fileSize || 0) - (a.metadata?.fileSize || 0);
+      case 'sizeAsc': return (a.metadata?.fileSize || 0) - (b.metadata?.fileSize || 0);
+      case 'dateAsc': return (a.metadata?.TimeStamp || 0) - (b.metadata?.TimeStamp || 0);
+      case 'dateDesc':
+      default: return (b.metadata?.TimeStamp || 0) - (a.metadata?.TimeStamp || 0);
+    }
+  });
+  return sorted;
+}
+function counts() {
+  let images = 0, others = 0, white = 0, block = 0;
+  for (const o of state.objects) {
+    if (o._kind === 'image') images++; else others++;
+    if (o.metadata?.ListType === 'White') white++;
+    if (o.metadata?.ListType === 'Block' || o.metadata?.Label === 'adult') block++;
+  }
+  return { total: state.objects.length, images, others, white, block };
+}
+
+/* ---------------------------- rendering --------------------------- */
+function iconFor(kind) {
+  if (kind === 'video') return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="14" height="12" rx="2"/><path d="M17 10l4-2v8l-4-2z"/></svg>';
+  if (kind === 'audio') return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M9 18V5l10-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="16" cy="16" r="3"/></svg>';
+  if (kind === 'image') return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="17" height="14" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M3.8 16.5l4.4-4.2 3.1 3 2.4-2.3 6.3 5.3"/></svg>';
+  return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg>';
+}
+
+function moderationChip(o) {
+  const lt = o.metadata?.ListType;
+  const label = o.metadata?.Label;
+  if (lt === 'White') return `<span class="chip chip-primary"><span class="dot"></span>${t('moderationWhite')}</span>`;
+  if (lt === 'Block' || label === 'adult') return `<span class="chip chip-danger"><span class="dot"></span>${t('moderationBlock')}</span>`;
+  if (o.metadata?.liked) return `<span class="chip chip-warn"><span class="dot"></span>${t('liked')}</span>`;
+  return '';
+}
+
+function renderChrome() {
+  applyStaticI18n(document);
+  applyTheme();
+  // nav counts
+  const c = counts();
+  $('count-all').textContent = c.total;
+  $('count-images').textContent = c.images;
+  $('count-white').textContent = c.white;
+  $('count-block').textContent = c.block;
+  document.querySelectorAll('.nav-item').forEach(b => {
+    b.setAttribute('aria-current', b.dataset.view === state.view ? 'page' : 'false');
+  });
+
+  // footer
+  const status = $('footer-status');
+  if (state.loading) status.textContent = t('loadingMore');
+  else if (state.loadError) status.textContent = t('loadFailedTitle');
+  else status.textContent = t('footerLoaded', { n: state.objects.length });
+  $('footer-index').textContent = state.listComplete ? t('footerComplete') : (state.objects.length ? t('footerPartial') : '');
+
+  // search clear
+  const clear = $('search-clear');
+  if (clear) clear.hidden = !state.query;
+}
+
+function render() {
+  renderChrome();
+  const main = $('main');
+  if (!state.ready && state.loading && state.objects.length === 0) {
+    main.innerHTML = `<div class="skeleton-grid">${Array.from({ length: 8 }, () => '<div class="skeleton"></div>').join('')}</div>`;
+    return;
+  }
+  if (!state.ready && state.loadError) {
+    main.innerHTML = stateSurface('error');
+    return;
+  }
+  if (state.view === 'overview') { renderOverview(main); return; }
+  renderBrowser(main);
+}
+
+function stateSurface(kind) {
+  if (kind === 'empty') {
+    return `<div class="state-surface">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M4 7.5A2.5 2.5 0 0 1 6.5 5H10l2 2h5.5A2.5 2.5 0 0 1 20 9.5v8A2.5 2.5 0 0 1 17.5 20h-11A2.5 2.5 0 0 1 4 17.5z"/></svg>
+      <h3>${t('emptyRemoteTitle')}</h3><p>${t('emptyRemoteBody')}</p>
+      <button class="btn btn-tonal" id="empty-retry">${t('refreshRemote')}</button>
+    </div>`;
+  }
+  if (kind === 'error') {
+    return `<div class="state-surface">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v4.5M12 16h.01"/></svg>
+      <h3>${t('loadFailedTitle')}</h3><p>${t('loadFailedBody')}</p>
+      <button class="btn btn-filled" id="empty-retry">${t('retry')}</button>
+    </div>`;
+  }
+  return `<div class="state-surface"><h3>${t('noResultsTitle')}</h3><p>${t('noResultsBody')}</p></div>`;
+}
+
+function renderOverview(main) {
+  const c = counts();
+  const recent = sortObjects(state.objects).slice(0, RECENT_LIMIT);
+  const titles = {
+    all: t('navAllFiles'), images: t('navImages'), whitelist: t('navWhitelist'), blacklist: t('navBlacklist'),
+  };
+  main.innerHTML = `
+    <div class="page-head">
+      <div>
+        <h1>${t('consoleOverview')}</h1>
+        <div class="subtitle">${t('overviewSubtitle')}</div>
+      </div>
+      <div class="page-tools">
+        <button class="btn btn-tonal" id="ov-refresh">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 1 1-2.2-5.5"/><path d="M20 4v5h-5"/></svg>
+          ${t('refreshRemote')}
+        </button>
+      </div>
+    </div>
+
+    <div class="stat-grid">
+      <div class="card stat-card">
+        <span class="stat-value">${c.total}</span>
+        <span class="stat-label">${t('statObjects')}</span>
+        <span class="stat-hint">${t('statObjectsHint')}</span>
+      </div>
+      <div class="card stat-card">
+        <span class="stat-value">${c.images}</span>
+        <span class="stat-label">${t('statImages')}</span>
+      </div>
+      <div class="card stat-card">
+        <span class="stat-value">${c.others}</span>
+        <span class="stat-label">${t('statOthers')}</span>
+      </div>
+      <div class="card stat-card">
+        <span class="stat-value">${c.white}</span>
+        <span class="stat-label">${t('statWhitelisted')}</span>
+      </div>
+      <div class="card stat-card">
+        <span class="stat-value">${c.block}</span>
+        <span class="stat-label">${t('statBlacklisted')}</span>
+      </div>
+    </div>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2>${t('recentObjects')}</h2>
+        <button class="btn btn-text" data-jump="recent">${t('navRecent')}</button>
+      </div>
+      <div class="panel-hint">${t('recentObjectsHint')}</div>
+      <div class="context-list">
+        ${recent.length ? recent.map(overviewRow).join('') : `<div class="state-surface"><p>${t('emptyRemoteBody')}</p></div>`}
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head"><h2>${t('operationalContext')}</h2></div>
+      <div class="context-list">
+        ${['all','images','whitelist','blacklist'].map(v => `
+          <button class="context-row" data-jump="${v}" style="border:0;width:100%;text-align:left;cursor:pointer">
+            <span class="ctx-thumb">${navGlyph(v)}</span>
+            <span class="ctx-meta">
+              <span class="ctx-name">${titles[v]}</span>
+              <span class="ctx-sub">${t('footerLoaded', { n: v === 'all' ? c.total : v === 'images' ? c.images : v === 'whitelist' ? c.white : c.block })}</span>
+            </span>
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M9 6l6 6-6 6"/></svg>
+          </button>`).join('')}
+      </div>
+    </section>
+  `;
+  main.querySelector('#ov-refresh')?.addEventListener('click', () => loadPage(true));
+  main.querySelectorAll('[data-jump]').forEach(b => b.addEventListener('click', () => setView(b.dataset.jump)));
+  main.querySelectorAll('.context-row[data-id]').forEach(r => r.addEventListener('click', () => openDetail(r.dataset.id)));
+}
+function navGlyph(v) {
+  const g = {
+    all: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 7.5A2.5 2.5 0 0 1 6.5 5H10l2 2h5.5A2.5 2.5 0 0 1 20 9.5v8A2.5 2.5 0 0 1 17.5 20h-11A2.5 2.5 0 0 1 4 17.5z"/></svg>',
+    images: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3.5" y="5" width="17" height="14" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M3.8 16.5l4.4-4.2 3.1 3 2.4-2.3 6.3 5.3"/></svg>',
+    whitelist: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 3l8 3v6c0 5-3.4 8-8 9-4.6-1-8-4-8-9V6z"/></svg>',
+    blacklist: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="9"/><path d="M5.6 5.6l12.8 12.8"/></svg>',
+  };
+  return g[v] || '';
+}
+function overviewRow(o) {
+  const thumb = (o._kind === 'image' || o._kind === 'video')
+    ? `<img src="/file/${esc(o.name)}" alt="" loading="lazy">` : iconFor(o._kind);
+  return `<button class="context-row" data-id="${esc(o.name)}" style="border:0;width:100%;text-align:left;cursor:pointer">
+    <span class="ctx-thumb">${thumb}</span>
+    <span class="ctx-meta">
+      <span class="ctx-name">${esc(o.metadata?.fileName || o.name)}</span>
+      <span class="ctx-sub">${esc(kindLabel(o._kind))} · ${esc(formatWhen(o.metadata?.TimeStamp))} · ${esc(formatBytes(o.metadata?.fileSize))}</span>
+    </span>
+    ${moderationChip(o)}
+  </button>`;
+}
+
+function renderBrowser(main) {
+  const list = filteredObjects();
+  const c = counts();
+  const clientFiltered = state.view === 'whitelist' || state.view === 'blacklist' || state.view === 'images';
+
+  main.innerHTML = `
+    <div class="page-head">
+      <div>
+        <h1>${viewTitle()}</h1>
+        <div class="subtitle">${viewSubtitle(c)}</div>
+      </div>
+      <div class="page-tools">
+        <div class="segmented" role="group" aria-label="${esc(t('viewGrid'))}">
+          <button data-layout="grid" aria-pressed="${state.layout === 'grid'}" data-i18n-aria="viewGridAria" title="${t('viewGrid')}">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.5"/></svg>
+            <span class="hide-phone">${t('layoutGrid')}</span>
+          </button>
+          <button data-layout="list" aria-pressed="${state.layout === 'list'}" data-i18n-aria="viewListAria" title="${t('viewList')}">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01"/></svg>
+            <span class="hide-phone">${t('layoutList')}</span>
+          </button>
+          <button data-layout="waterfall" aria-pressed="${state.layout === 'waterfall'}" title="${t('layoutWaterfall')}">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><rect x="3.5" y="3.5" width="7" height="10" rx="1.5"/><rect x="13.5" y="3.5" width="7" height="6" rx="1.5"/><rect x="3.5" y="16.5" width="7" height="4" rx="1.5"/><rect x="13.5" y="12.5" width="7" height="8" rx="1.5"/></svg>
+            <span class="hide-phone">${t('layoutWaterfall')}</span>
+          </button>
+        </div>
+        <select class="select-field" id="sort-select" aria-label="${t('sortBy')}">
+          <option value="dateDesc">${t('sortNewest')}</option>
+          <option value="dateAsc">${t('sortOldest')}</option>
+          <option value="nameAsc">${t('sortNameAsc')}</option>
+          <option value="nameDesc">${t('sortNameDesc')}</option>
+          <option value="sizeDesc">${t('sortSizeDesc')}</option>
+          <option value="sizeAsc">${t('sortSizeAsc')}</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="results-meta">
+      <span>${state.query ? t('resultCount', { n: list.length }) : t('resultCountOf', { shown: list.length, total: state.objects.length })}</span>
+      <span class="spacer"></span>
+      <span class="index-note ${state.listComplete ? 'complete' : ''}">
+        <span class="dot"></span>
+        ${state.listComplete ? t('listComplete') : t('listIncomplete')}
+      </span>
+    </div>
+    ${clientFiltered ? `<div class="results-meta"><span>${t('listFilteredClient', { n: state.objects.length })}</span></div>` : ''}
+
+    <div id="browser" tabindex="-1"></div>
+
+    <div style="display:flex;justify-content:center;margin-top:var(--space-6)">
+      ${!state.listComplete ? `<button class="btn btn-outlined" id="load-more" ${state.loading ? 'disabled' : ''}>
+        ${state.loading ? `<span class="spinner"></span> ${t('loadingMore')}` : t('loadMore')}
+      </button>` : (list.length ? '' : '')}
+    </div>
+  `;
+
+  const browser = main.querySelector('#browser');
+  if (list.length === 0) {
+    browser.innerHTML = stateSurface(state.objects.length === 0 ? 'empty' : 'noresults');
+  } else if (state.layout === 'list') {
+    browser.innerHTML = renderList(list);
+  } else if (state.layout === 'waterfall') {
+    browser.innerHTML = renderWaterfall(list);
+  } else {
+    browser.innerHTML = renderGrid(list);
+  }
+
+  main.querySelector('#sort-select').value = state.sort;
+  main.querySelector('#sort-select').addEventListener('change', (e) => { state.sort = e.target.value; savePrefs({ sort: state.sort }); render(); });
+  main.querySelectorAll('[data-layout]').forEach(b => b.addEventListener('click', () => { state.layout = b.dataset.layout; savePrefs({ layout: state.layout }); render(); }));
+  main.querySelector('#load-more')?.addEventListener('click', () => loadPage(false));
+  main.querySelector('#empty-retry')?.addEventListener('click', () => loadPage(true));
+
+  bindObjectCards(browser);
+  renderBulkBar();
+}
+
+function viewTitle() {
+  return {
+    all: t('navAllFiles'), images: t('navImages'), recent: t('navRecent'),
+    whitelist: t('navWhitelist'), blacklist: t('navBlacklist'),
+  }[state.view] || t('navAllFiles');
+}
+function viewSubtitle(c) {
+  if (state.view === 'recent') return t('recentObjectsHint');
+  if (state.view === 'whitelist') return `${c.white} · ${t('listFilteredClient', { n: c.total }).replace(/^[a-z]/, '')}`;
+  return '';
+}
+
+function thumb(o) {
+  if (o._kind === 'image') return `<img src="/file/${esc(o.name)}" alt="" loading="lazy">`;
+  if (o._kind === 'video') return `${iconFor('video')}<span class="video-badge">▶</span>`;
+  return iconFor(o._kind);
+}
+
+function renderGrid(list) {
+  return `<div class="obj-grid">${list.map(cardHtml).join('')}</div>`;
+}
+function renderWaterfall(list) {
+  const items = list.map(o => {
+    const isMedia = o._kind === 'image' || o._kind === 'video';
+    const media = isMedia
+      ? (o._kind === 'video'
+          ? `<video src="/file/${esc(o.name)}" preload="metadata" muted></video>`
+          : `<img src="/file/${esc(o.name)}" alt="" loading="lazy">`)
+      : `<div style="aspect-ratio:1/1;display:grid;place-items:center;background:var(--md-sys-color-surface-container-high)">${iconFor(o._kind)}</div>`;
+    return `<div class="wf-item ${state.selected.has(o.name) ? 'selected' : ''}" data-id="${esc(o.name)}">
+      <span class="wf-moderation">${moderationChip(o)}</span>
+      <label class="wf-select card-select"><input type="checkbox" data-select="${esc(o.name)}" ${state.selected.has(o.name) ? 'checked' : ''} aria-label="${esc(t('selectObject', { name: o.name }))}"></label>
+      ${media}
+      <div class="wf-overlay"><span>${esc(o.metadata?.fileName || o.name)}</span></div>
+    </div>`;
+  }).join('');
+  return `<div class="obj-waterfall">${items}</div>`;
+}
+function renderList(list) {
+  const rows = list.map(o => `
+    <div class="obj-row ${state.selected.has(o.name) ? 'selected' : ''}" data-id="${esc(o.name)}">
+      <label><input type="checkbox" data-select="${esc(o.name)}" ${state.selected.has(o.name) ? 'checked' : ''} aria-label="${esc(t('selectObject', { name: o.name }))}"></label>
+      <span class="cell-thumb">${o._kind === 'image' ? `<img src="/file/${esc(o.name)}" alt="" loading="lazy">` : iconFor(o._kind)}</span>
+      <span class="cell-name">
+        <span class="name">${esc(o.metadata?.fileName || o.name)}</span>
+        <span class="sub">${esc(extOf(o.name).toUpperCase())} · ${esc(fullDate(o.metadata?.TimeStamp))}</span>
+      </span>
+      <span class="cell-hide-sm cell-mono">${esc(formatBytes(o.metadata?.fileSize))}</span>
+      <span class="cell-hide-sm">${esc(kindLabel(o._kind))}</span>
+      <span class="cell-hide-sm">${moderationChip(o)}</span>
+      <button class="icon-btn" data-menu="${esc(o.name)}" data-i18n-aria="objectActions" aria-label="${esc(t('objectActions', { name: o.name }))}">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><circle cx="6" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="18" cy="12" r="1.6"/></svg>
+      </button>
+    </div>`).join('');
+  return `<div class="obj-list">
+    <div class="obj-row head">
+      <span></span><span></span>
+      <span>${t('colName')}</span>
+      <span class="cell-hide-sm">${t('colSize')}</span>
+      <span class="cell-hide-sm">${t('colType')}</span>
+      <span class="cell-hide-sm">${t('colStatus')}</span>
+      <span></span>
+    </div>
+    ${rows}
+  </div>`;
+}
+
+function cardHtml(o) {
+  return `<article class="obj-card ${state.selected.has(o.name) ? 'selected' : ''}" data-id="${esc(o.name)}">
+    <span class="obj-moderation">${moderationChip(o)}</span>
+    <label class="card-select"><input type="checkbox" data-select="${esc(o.name)}" ${state.selected.has(o.name) ? 'checked' : ''} aria-label="${esc(t('selectObject', { name: o.name }))}"></label>
+    <div class="obj-thumb" data-open="${esc(o.name)}" role="button" tabindex="0" aria-label="${esc(t('openDetails', { name: o.name }))}">${thumb(o)}</div>
+    <div class="obj-meta">
+      <div class="obj-name" title="${esc(o.metadata?.fileName || o.name)}">${esc(o.metadata?.fileName || o.name)}</div>
+      <div class="obj-sub"><span>${esc(kindLabel(o._kind))}</span><span>·</span><span>${esc(formatBytes(o.metadata?.fileSize))}</span></div>
+    </div>
+    <div class="card-menu">
+      <button class="icon-btn" data-menu="${esc(o.name)}" data-i18n-aria="objectActions" aria-label="${esc(t('objectActions', { name: o.name }))}">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><circle cx="6" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="18" cy="12" r="1.6"/></svg>
+      </button>
+    </div>
+  </article>`;
+}
+
+function bindObjectCards(scope) {
+  scope.querySelectorAll('[data-open]').forEach(el => {
+    const handler = () => openDetail(el.dataset.open);
+    el.addEventListener('click', handler);
+    el.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handler(); }
+    });
+  });
+  scope.querySelectorAll('input[data-select]').forEach(cb => {
+    cb.addEventListener('click', (e) => e.stopPropagation());
+    cb.addEventListener('change', () => toggleSelect(cb.dataset.select, cb.checked));
+  });
+  scope.querySelectorAll('[data-menu]').forEach(btn => {
+    btn.addEventListener('click', (e) => { e.stopPropagation(); openObjectMenu(btn, btn.dataset.menu); });
+  });
+  scope.querySelectorAll('.wf-item').forEach(el => {
+    el.addEventListener('click', (e) => {
+      if (e.target.closest('input,button,a')) return;
+      openDetail(el.dataset.id);
+    });
+  });
+}
+
+/* --------------------------- selection --------------------------- */
+function toggleSelect(id, on) {
+  if (on) state.selected.add(id); else state.selected.delete(id);
+  renderBulkBar();
+  document.querySelectorAll(`[data-select="${CSS.escape(id)}"]`).forEach(cb => { cb.checked = on; });
+  document.querySelectorAll(`[data-id="${CSS.escape(id)}"]`).forEach(card => card.classList.toggle('selected', on));
+}
+function clearSelection() { state.selected.clear(); render(); }
+function selectAllVisible() {
+  filteredObjects().forEach(o => state.selected.add(o.name));
+  render();
+}
+function selectedObjects() {
+  return state.objects.filter(o => state.selected.has(o.name));
+}
+
+/* ---------------------------- bulk bar --------------------------- */
+function renderBulkBar() {
+  let bar = document.querySelector('.bulk-bar');
+  if (!bar) {
+    bar = document.createElement('div');
+    bar.className = 'bulk-bar';
+    bar.innerHTML = `
+      <span class="bulk-count" id="bulk-count"></span>
+      <button data-bulk="copy" data-i18n="bulkCopy"></button>
+      <button data-bulk="white" data-i18n="bulkWhitelist"></button>
+      <button data-bulk="block" data-i18n="bulkBlacklist"></button>
+      <button data-bulk="download" data-i18n="bulkDownload"></button>
+      <button data-bulk="delete" class="danger" data-i18n="bulkDelete"></button>
+      <button data-bulk="clear" data-i18n="clearSelection"></button>`;
+    document.body.appendChild(bar);
+    bar.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-bulk]');
+      if (!btn) return;
+      if (btn.dataset.bulk === 'clear') return clearSelection();
+      if (btn.dataset.bulk === 'copy') return bulkCopy();
+      if (btn.dataset.bulk === 'white') return bulkModerate('White');
+      if (btn.dataset.bulk === 'block') return bulkModerate('Block');
+      if (btn.dataset.bulk === 'download') return bulkDownload();
+      if (btn.dataset.bulk === 'delete') return bulkDelete();
+    });
+  }
+  applyStaticI18n(bar);
+  const n = state.selected.size;
+  bar.classList.toggle('show', n > 0);
+  bar.querySelector('#bulk-count').textContent = t('bulkBar', { n });
+}
+
+/* ----------------------------- menus ----------------------------- */
+let activeMenu = null;
+function closeMenu() {
+  if (activeMenu) { activeMenu.remove(); activeMenu = null; document.removeEventListener('click', closeMenu, true); }
+}
+function openObjectMenu(anchor, id) {
+  closeMenu();
+  const obj = state.objects.find(o => o.name === id);
+  if (!obj) return;
+  const menu = document.createElement('div');
+  menu.className = 'menu';
+  const items = [
+    { label: t('openPreview'), icon: iconFor('image'), fn: () => openDetail(id) },
+    { label: t('copyUrl'), fn: () => copyText(linkFor(obj, 'url')) },
+    { label: t('copyMarkdown'), fn: () => copyText(linkFor(obj, 'markdown')) },
+    { label: t('copyBbcode'), fn: () => copyText(linkFor(obj, 'bbcode')) },
+    { label: t('copyHtml'), fn: () => copyText(linkFor(obj, 'html')) },
+    { label: t('download'), fn: () => downloadObject(obj) },
+    { label: t('rename'), fn: () => openRename(obj) },
+    { sep: true },
+    { label: t('whitelist'), fn: () => moderate(obj, 'White') },
+    { label: t('blacklist'), danger: true, fn: () => moderate(obj, 'Block') },
+    { label: t('deleteObject'), danger: true, fn: () => confirmDelete([obj]) },
+  ];
+  menu.innerHTML = items.map((it, i) => it.sep ? '<hr>' :
+    `<button data-i="${i}" class="${it.danger ? 'danger' : ''}">${it.icon || ''}<span>${esc(it.label)}</span></button>`).join('');
+  document.body.appendChild(menu);
+  const rect = anchor.getBoundingClientRect();
+  const mw = 220;
+  let left = Math.min(rect.left, window.innerWidth - mw - 8);
+  let top = rect.bottom + 4;
+  if (top + 300 > window.innerHeight) top = Math.max(8, rect.top - 300);
+  menu.style.left = Math.max(8, left) + 'px';
+  menu.style.top = top + 'px';
+  menu.style.minWidth = mw + 'px';
+  activeMenu = menu;
+  setTimeout(() => document.addEventListener('click', closeMenu, true), 0);
+  menu.addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-i]');
+    if (!b) return;
+    e.stopPropagation();
+    const it = items[Number(b.dataset.i)];
+    closeMenu();
+    it.fn?.();
+  });
+}
+
+/* --------------------------- detail sheet ------------------------ */
+function openDetail(id) {
+  const obj = state.objects.find(o => o.name === id);
+  if (!obj) return;
+  state.detailId = id;
+  const sheet = $('detail-sheet');
+  const body = $('detail-body');
+  const acts = $('detail-actions');
+  sheet.hidden = false;
+  requestAnimationFrame(() => sheet.classList.add('open'));
+  showBackdrop();
+
+  const preview = (o._kind === 'image')
+    ? `<img src="/file/${esc(o.name)}" alt="${esc(o.metadata?.fileName || o.name)}">`
+    : (o._kind === 'video')
+      ? `<video src="/file/${esc(o.name)}" controls></video>`
+      : (o._kind === 'audio')
+        ? `<audio src="/file/${esc(o.name)}" controls style="width:100%"></audio>`
+        : `<div class="no-preview">${iconFor(o._kind)}<span>${t('previewUnavailable')}</span></div>`;
+
+  body.innerHTML = `
+    <div class="detail-preview">${preview}</div>
+    <div class="detail-actions-row">
+      <button class="btn btn-filled btn-sm" id="d-copy-url">${t('copyUrl')}</button>
+      <button class="btn btn-outlined btn-sm" id="d-copy-md">MD</button>
+      <button class="btn btn-outlined btn-sm" id="d-copy-bb">BBCode</button>
+      <button class="btn btn-outlined btn-sm" id="d-copy-html">HTML</button>
+      <button class="btn btn-tonal btn-sm" id="d-download">${t('download')}</button>
+    </div>
+    <dl class="detail-dl">
+      <dt>${t('metaFilename')}</dt><dd>${esc(o.metadata?.fileName || o.name)}</dd>
+      <dt>${t('metaId')}</dt><dd class="mono">${esc(o.name)}</dd>
+      <dt>${t('metaType')}</dt><dd>${esc(kindLabel(o._kind))} · ${esc(extOf(o.name).toUpperCase() || '—')}</dd>
+      <dt>${t('metaSize')}</dt><dd>${esc(formatBytes(o.metadata?.fileSize))}</dd>
+      <dt>${t('metaAdded')}</dt><dd>${esc(fullDate(o.metadata?.TimeStamp))}</dd>
+      <dt>${t('metaModeration')}</dt><dd>${moderationChip(o) || t('moderationNone')}</dd>
+      ${o.metadata?.provider ? `<dt>${t('metaProvider')}</dt><dd>${esc(o.metadata.provider)}</dd>` : ''}
+      <dt>${t('metaPublicUrl')}</dt>
+      <dd>
+        <div class="url-row">
+          <input readonly value="${esc(publicUrl(o))}" id="d-url-input">
+          <button class="btn btn-tonal btn-sm" id="d-copy-2">${t('copyUrl')}</button>
+        </div>
+      </dd>
+      <dt>${t('metaRawMetadata')}</dt><dd class="mono">${esc(JSON.stringify(o.metadata, null, 2))}</dd>
+    </dl>
+  `;
+  const likeLabel = o.metadata?.liked ? t('toggleLike') : t('liked');
+  acts.innerHTML = `
+    <button class="btn btn-tonal" id="d-rename">${t('rename')}</button>
+    <button class="btn btn-tonal" id="d-like">${likeLabel}</button>
+    <span style="flex:1"></span>
+    <button class="btn btn-outlined" id="d-white">${t('whitelist')}</button>
+    <button class="btn btn-outlined" id="d-block">${t('blacklist')}</button>
+    <button class="btn btn-danger-tonal" id="d-delete">${t('deleteObject')}</button>
+  `;
+  body.querySelector('#d-copy-url').onclick = () => copyText(publicUrl(o));
+  body.querySelector('#d-copy-md').onclick = () => copyText(linkFor(o, 'markdown'));
+  body.querySelector('#d-copy-bb').onclick = () => copyText(linkFor(o, 'bbcode'));
+  body.querySelector('#d-copy-html').onclick = () => copyText(linkFor(o, 'html'));
+  body.querySelector('#d-copy-2').onclick = () => copyText(publicUrl(o));
+  body.querySelector('#d-download').onclick = () => downloadObject(o);
+  acts.querySelector('#d-rename').onclick = () => openRename(o);
+  acts.querySelector('#d-like').onclick = () => toggleLike(o);
+  acts.querySelector('#d-white').onclick = () => moderate(o, 'White');
+  acts.querySelector('#d-block').onclick = () => moderate(o, 'Block');
+  acts.querySelector('#d-delete').onclick = () => confirmDelete([o]);
+
+  setTimeout(() => $('detail-close').focus(), 30);
+}
+function closeDetail() {
+  const sheet = $('detail-sheet');
+  sheet.classList.remove('open');
+  hideBackdrop();
+  setTimeout(() => { sheet.hidden = true; }, 250);
+  state.detailId = null;
+}
+
+/* ---------------------------- actions ----------------------------- */
+function downloadObject(o) {
+  const a = document.createElement('a');
+  a.href = `/file/${o.name}`;
+  a.download = o.metadata?.fileName || o.name;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+}
+function bulkDownload() {
+  const objs = selectedObjects();
+  if (!objs.length) return;
+  snackbar(t('processing'));
+  objs.forEach((o, i) => setTimeout(() => downloadObject(o), i * 600));
+  clearSelection();
+}
+function bulkCopy() {
+  const objs = selectedObjects();
+  if (!objs.length) return;
+  copyText(objs.map(o => publicUrl(o)).join('\n'));
+}
+
+async function moderate(obj, type) {
+  const endpoint = type === 'White' ? 'white' : 'block';
+  try {
+    const meta = await runAction(obj.name, `/api/manage/${endpoint}/${encodeURIComponent(obj.name)}`);
+    upsertObject(obj.name, { metadata: meta || { ListType: type } });
+    snackbar(type === 'White' ? t('actionWhitelistSuccess') : t('actionBlacklistSuccess'));
+    render();
+  } catch (err) {
+    if (err instanceof AuthError) return handleSessionExpired();
+    snackbar(t('actionFailed'), { isError: true, action: t('retry'), onAction: () => moderate(obj, type) });
+  }
+}
+
+async function bulkModerate(type) {
+  const objs = selectedObjects();
+  if (!objs.length) return;
+  const endpoint = type === 'White' ? 'white' : 'block';
+  const title = t('confirmModerateTitle');
+  const body = type === 'White' ? t('confirmBulkWhitelistBody', { n: objs.length }) : t('confirmBulkBlacklistBody', { n: objs.length });
+  const ok = await openConfirm({ title, body, confirmText: type === 'White' ? t('whitelist') : t('blacklist') });
+  if (!ok) return;
+  let success = 0, failed = 0;
+  for (const o of objs) {
+    try {
+      const meta = await runAction(o.name, `/api/manage/${endpoint}/${encodeURIComponent(o.name)}`);
+      upsertObject(o.name, { metadata: meta || { ListType: type } });
+      success++;
+    } catch (err) {
+      if (err instanceof AuthError) return handleSessionExpired();
+      failed++;
+    }
+  }
+  clearSelection();
+  if (failed) snackbar(t('bulkSomeFailed', { failed }), { isError: true });
+  else snackbar(t('bulkComplete', { success, total: objs.length }));
+  render();
+}
+
+async function toggleLike(obj) {
+  try {
+    const data = await runAction(obj.name, `/api/manage/toggleLike/${encodeURIComponent(obj.name)}`);
+    upsertObject(obj.name, { metadata: { liked: data.liked } });
+    snackbar(data.liked ? t('actionLikeSuccess') : t('actionUnlikeSuccess'));
+    if (state.detailId === obj.name) openDetail(obj.name);
+    render();
+  } catch (err) {
+    if (err instanceof AuthError) return handleSessionExpired();
+    snackbar(t('actionFailed'), { isError: true });
+  }
+}
+
+async function renameObject(obj, newName) {
+  try {
+    const data = await runAction(obj.name, `/api/manage/editName/${encodeURIComponent(obj.name)}?newName=${encodeURIComponent(newName)}`);
+    upsertObject(obj.name, { metadata: { fileName: data.fileName } });
+    snackbar(t('actionRenameSuccess'));
+    if (state.detailId === obj.name) openDetail(obj.name);
+    render();
+    return true;
+  } catch (err) {
+    if (err instanceof AuthError) return handleSessionExpired();
+    snackbar(t('actionFailed'), { isError: true });
+    return false;
+  }
+}
+
+async function deleteObjects(objs) {
+  let success = 0, failed = 0;
+  for (const o of objs) {
+    try {
+      await runAction(o.name, `/api/manage/delete/${encodeURIComponent(o.name)}`);
+      removeObject(o.name);
+      success++;
+    } catch (err) {
+      if (err instanceof AuthError) return handleSessionExpired();
+      failed++;
+    }
+  }
+  clearSelection();
+  if (failed) snackbar(t('bulkSomeFailed', { failed }), { isError: true });
+  else snackbar(t('actionDeleteSuccess'));
+  if (state.detailId && !state.objects.find(o => o.name === state.detailId)) closeDetail();
+  render();
+}
+
+async function checkBroken() {
+  if (state.brokenChecking) return;
+  state.brokenChecking = true;
+  snackbar(t('brokenChecking', { done: 0, total: state.objects.length }));
+  let broken = 0, done = 0;
+  for (const o of state.objects) {
+    try {
+      const res = await fetch(`/file/${o.name}`, { method: 'HEAD', cache: 'no-cache' });
+      if (!res.ok) { state.selected.add(o.name); broken++; }
+    } catch (_) { state.selected.add(o.name); broken++; }
+    done++;
+    if (done % 10 === 0) snackbar(t('brokenChecking', { done, total: state.objects.length }));
+  }
+  state.brokenChecking = false;
+  if (broken) snackbar(t('brokenFound', { n: broken }));
+  else snackbar(t('brokenNone'));
+  render();
+}
+
+/* ----------------------------- dialog ---------------------------- */
+let dialogResolver = null;
+function openConfirm({ title, body, confirmText, danger, extra }) {
+  return new Promise((resolve) => {
+    const scrim = $('dialog-scrim');
+    const dlg = $('dialog');
+    $('dialog-title').textContent = title;
+    $('dialog-body').textContent = body;
+    const extraHost = $('dialog-extra');
+    extraHost.innerHTML = '';
+    if (extra) extraHost.appendChild(extra);
+    const actions = $('dialog-actions');
+    actions.innerHTML = '';
+    const cancelBtn = document.createElement('button');
+    cancelBtn.className = 'btn btn-text';
+    cancelBtn.textContent = t('cancel');
+    const okBtn = document.createElement('button');
+    okBtn.className = 'btn ' + (danger ? 'btn-danger-tonal' : 'btn-filled');
+    okBtn.textContent = confirmText || t('ok');
+    actions.append(cancelBtn, okBtn);
+    scrim.hidden = false; dlg.hidden = false;
+    requestAnimationFrame(() => { scrim.classList.add('open'); dlg.classList.add('open'); });
+    setTimeout(() => okBtn.focus(), 30);
+
+    const cleanup = (val) => {
+      scrim.classList.remove('open'); dlg.classList.remove('open');
+      setTimeout(() => { scrim.hidden = true; dlg.hidden = true; }, 220);
+      dialogResolver = null;
+      resolve(val);
+    };
+    dialogResolver = cleanup;
+    cancelBtn.onclick = () => cleanup(false);
+    okBtn.onclick = () => cleanup(true);
+  });
+}
+function closeDialogViaEscape() {
+  if (dialogResolver) dialogResolver(false);
+}
+
+function confirmDelete(objs) {
+  const single = objs.length === 1;
+  return openConfirm({
+    title: single ? t('confirmDeleteTitle') : t('confirmBulkDeleteTitle', { n: objs.length }),
+    body: single ? t('confirmDeleteBody') : t('confirmBulkDeleteBody'),
+    confirmText: t('delete'),
+    danger: true,
+  }).then(ok => { if (ok) deleteObjects(objs); });
+}
+
+function openRename(obj) {
+  const host = document.createElement('div');
+  host.appendChild($('rename-template').content.cloneNode(true));
+  const input = host.querySelector('#rename-input');
+  const errEl = host.querySelector('#rename-error');
+  input.value = obj.metadata?.fileName || obj.name;
+  return openConfirm({
+    title: t('renameTitle'),
+    body: '',
+    confirmText: t('renameConfirm'),
+    extra: host,
+  }).then(async (ok) => {
+    if (!ok) return;
+    const val = input.value.trim();
+    if (!val) { errEl.textContent = t('nameRequired'); snackbar(t('nameRequired'), { isError: true }); return; }
+    if (val.length > 64) { errEl.textContent = t('nameTooLong'); snackbar(t('nameTooLong'), { isError: true }); return; }
+    await renameObject(obj, val);
+  });
+}
+
+/* ---------------------------- backdrop --------------------------- */
+function showBackdrop() {
+  const b = $('backdrop'); b.hidden = false;
+  requestAnimationFrame(() => b.classList.add('open'));
+}
+function hideBackdrop() {
+  const b = $('backdrop'); b.classList.remove('open');
+  setTimeout(() => { b.hidden = true; }, 220);
+}
+
+/* ----------------------- command palette ------------------------- */
+const paletteCommands = () => [
+  { id: 'search', label: t('commandFocusSearch'), kbd: '/', run: () => focusSearch() },
+  { id: 'grid', label: t('commandGrid'), run: () => { state.layout = 'grid'; savePrefs({ layout: 'grid' }); render(); } },
+  { id: 'list', label: t('commandList'), run: () => { state.layout = 'list'; savePrefs({ layout: 'list' }); render(); } },
+  { id: 'waterfall', label: t('commandWaterfall'), run: () => { state.layout = 'waterfall'; savePrefs({ layout: 'waterfall' }); render(); } },
+  { id: 'refresh', label: t('commandRefresh'), kbd: 'R', run: () => loadPage(true) },
+  { id: 'open', label: t('commandOpen'), run: () => { const first = filteredObjects()[0]; if (first) openDetail(first.name); } },
+  { id: 'copy', label: t('commandCopyUrls'), run: bulkCopy },
+  { id: 'white', label: t('commandWhitelist'), run: () => bulkModerate('White') },
+  { id: 'block', label: t('commandBlacklist'), run: () => bulkModerate('Block') },
+  { id: 'delete', label: t('commandDelete'), run: bulkDelete },
+  { id: 'broken', label: t('commandBroken'), run: checkBroken },
+  { id: 'theme', label: t('commandTheme'), run: toggleTheme },
+  { id: 'lang-en', label: t('commandLangEn'), run: () => setLanguage('en') },
+  { id: 'lang-id', label: t('commandLangId'), run: () => setLanguage('id') },
+  { id: 'logout', label: t('commandLogout'), run: logout },
+];
+let paletteActive = 0;
+function openPalette() {
+  const p = $('palette'); const scrim = $('palette-scrim'); const input = $('palette-input');
+  p.hidden = false; scrim.hidden = false;
+  requestAnimationFrame(() => { p.classList.add('open'); scrim.classList.add('open'); input.focus(); input.select(); });
+  paletteActive = 0;
+  renderPalette('');
+}
+function closePalette() {
+  const p = $('palette'); const scrim = $('palette-scrim');
+  p.classList.remove('open'); scrim.classList.remove('open');
+  setTimeout(() => { p.hidden = true; scrim.hidden = true; }, 200);
+}
+function renderPalette(q) {
+  const results = $('palette-results');
+  const all = paletteCommands();
+  const query = q.trim().toLowerCase();
+  const items = query ? all.filter(c => c.label.toLowerCase().includes(query)) : all;
+  if (paletteActive >= items.length) paletteActive = 0;
+  results.innerHTML = items.map((c, i) =>
+    `<button class="palette-item ${i === paletteActive ? 'active' : ''}" role="option" data-i="${i}">
+      <span>${esc(c.label)}</span>${c.kbd ? `<kbd>${esc(c.kbd)}</kbd>` : ''}
+    </button>`).join('') || `<div class="palette-item" style="color:var(--md-sys-color-on-surface-variant)">—</div>`;
+  results.querySelectorAll('button[data-i]').forEach(b => {
+    b.onmouseenter = () => { paletteActive = Number(b.dataset.i); renderPalette(query); };
+    b.onclick = () => { const cmd = items[paletteActive]; closePalette(); cmd?.run(); };
+  });
+}
+
+/* ----------------------------- view ------------------------------ */
+function setView(v) {
+  state.view = v;
+  savePrefs({ adminView: v });
+  closeMobileNav();
+  render();
+}
+function focusSearch() {
+  const s = $('search');
+  if (s) { s.focus(); if (window.innerWidth <= 768) setView('all'); }
+}
+
+function toggleTheme() {
+  state.theme = state.theme === 'dark' ? 'light' : 'dark';
+  savePrefs({ theme: state.theme });
+  applyTheme();
+}
+function cycleLanguage() {
+  setLanguage(getLanguage() === 'en' ? 'id' : 'en');
+}
+
+/* --------------------------- mobile nav -------------------------- */
+function toggleMobileNav() { $('side-nav').classList.toggle('open'); }
+function closeMobileNav() { $('side-nav').classList.remove('open'); }
+
+/* ----------------------------- init ------------------------------ */
+function bindEvents() {
+  document.querySelectorAll('.nav-item').forEach(b => b.addEventListener('click', () => setView(b.dataset.view)));
+  $('nav-toggle')?.addEventListener('click', toggleMobileNav);
+  $('refresh-btn').addEventListener('click', () => loadPage(true));
+  $('theme-btn').addEventListener('click', toggleTheme);
+  $('lang-btn').addEventListener('click', cycleLanguage);
+  $('logout-btn').addEventListener('click', logout);
+  $('palette-btn').addEventListener('click', openPalette);
+  $('detail-close').addEventListener('click', closeDetail);
+
+  const search = $('search');
+  let timer = null;
+  search.addEventListener('input', () => {
+    state.query = search.value;
+    if (state.view === 'overview') state.view = 'all';
+    clearTimeout(timer);
+    timer = setTimeout(render, 120);
+  });
+  $('search-clear').addEventListener('click', () => { search.value = ''; state.query = ''; search.focus(); render(); });
+
+  $('backdrop').addEventListener('click', () => { closeDetail(); closeMobileNav(); });
+
+  // palette
+  const pinput = $('palette-input');
+  pinput.addEventListener('input', () => { paletteActive = 0; renderPalette(pinput.value); });
+  pinput.addEventListener('keydown', (e) => {
+    const items = $('palette-results').querySelectorAll('button[data-i]');
+    if (e.key === 'ArrowDown') { e.preventDefault(); paletteActive = (paletteActive + 1) % items.length; renderPalette(pinput.value); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); paletteActive = (paletteActive - 1 + items.length) % items.length; renderPalette(pinput.value); }
+    else if (e.key === 'Enter') { e.preventDefault(); items[paletteActive]?.click(); }
+    else if (e.key === 'Escape') { closePalette(); }
+  });
+  $('palette-scrim').addEventListener('click', closePalette);
+
+  // global keys
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      if (!$('palette').hidden) return closePalette();
+      if (!$('detail-sheet').hidden) return closeDetail();
+      closeDialogViaEscape();
+      closeMenu();
+      return;
+    }
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); openPalette(); return; }
+    if (e.key === '/' && document.activeElement?.tagName !== 'INPUT' && document.activeElement?.tagName !== 'TEXTAREA') {
+      e.preventDefault(); focusSearch();
+    }
+  });
+
+  onLanguageChange(() => {
+    document.documentElement.lang = getLanguage();
+    render();
+  });
+}
+
+async function init() {
+  initI18n();
+  setLanguage(detectLanguage());
+  document.documentElement.lang = getLanguage();
+
+  const prefs = loadPrefs();
+  state.theme = detectTheme(prefs);
+  state.layout = prefs.layout === 'list' || prefs.layout === 'waterfall' ? prefs.layout : 'grid';
+  state.sort = prefs.sort || 'dateDesc';
+  state.view = ['overview', 'all', 'images', 'recent', 'whitelist', 'blacklist'].includes(prefs.adminView) ? prefs.adminView : 'overview';
+
+  applyTheme();
+  bindEvents();
+  render();
+
+  // session-expired message?
+  try {
+    if (sessionStorage.getItem('ti.session-expired')) {
+      sessionStorage.removeItem('ti.session-expired');
+      setTimeout(() => snackbar(t('sessionExpired'), { isError: true }), 300);
+    }
+  } catch (_) { /* ignore */ }
+
+  try {
+    const session = await checkSession();
+    state.authEnabled = session.authEnabled !== false;
+    if (!state.authEnabled) snackbar(t('authDisabledConsole'));
+    await loadPage(true);
+  } catch (err) {
+    if (err instanceof AuthError) return handleSessionExpired();
+    state.loadError = true; render();
+  }
+}
+
+init();
