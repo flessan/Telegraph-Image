@@ -65,6 +65,35 @@ function makePng(file, rgb) {
   return file;
 }
 
+async function collectFileLinks(page) {
+  return page.evaluate(() => {
+    const found = new Set();
+    document.querySelectorAll('input,textarea').forEach(el => {
+      const v = el.value || '';
+      const m = v.match(/\/file\/[A-Za-z0-9_.\-]+/g);
+      if (m) m.forEach(x => found.add(x));
+    });
+    document.querySelectorAll('a[href*="/file/"], img[src*="/file/"]').forEach(el => {
+      const v = el.getAttribute('href') || el.getAttribute('src');
+      const m = v && v.match(/\/file\/[A-Za-z0-9_.\-]+/);
+      if (m) found.add(m[0]);
+    });
+    const text = document.body.innerText.match(/\/file\/[A-Za-z0-9_.\-]+/g);
+    if (text) text.forEach(x => found.add(x));
+    return [...found];
+  });
+}
+
+async function clickPush(page) {
+  const push = page.locator('#push-changes');
+  await push.waitFor({ state: 'visible', timeout: 5000 });
+  await page.waitForFunction(() => {
+    const btn = document.getElementById('push-changes');
+    return btn && !btn.disabled;
+  }, { timeout: 8000 });
+  await push.click();
+}
+
 (async () => {
   const browser = await chromium.launch(
     process.env.E2E_CHROMIUM ? { executablePath: process.env.E2E_CHROMIUM } : {}
@@ -73,7 +102,7 @@ function makePng(file, rgb) {
   const page = await context.newPage();
 
   // Script errors are defects; a blocked image/CDN host is the sandbox, not the
-  // code (the wallpaper slideshow degrades to the CSS gradient either way).
+  // code (external dashboard CDNs are skipped separately below).
   const consoleErrors = [];
   const resourceErrors = [];
   page.on('console', m => {
@@ -101,34 +130,64 @@ function makePng(file, rgb) {
   check('存在文件选择输入', inputCount > 0);
   check('支持多文件选择 (multiple)', isMultiple);
 
-  // --- 3. batch upload of two files
+  // --- 3. stage two files locally, then push through the existing /upload API
   const f1 = makePng(path.join(OUT, 'e2e-a.png'), [255, 0, 0]);
   const f2 = makePng(path.join(OUT, 'e2e-b.png'), [0, 128, 255]);
   await fileInput.setInputFiles([f1, f2]);
 
-  // wait for two result links to appear
+  await page.waitForTimeout(400);
+  const stagedBeforePush = await collectFileLinks(page);
+  check('选择文件后不会立即上传', stagedBeforePush.length === 0,
+    `选择后立刻找到 ${stagedBeforePush.length} 条远程链接`);
+
+  const pendingVisible = await page.evaluate(() => {
+    const chips = [...document.querySelectorAll('[data-role="status"]')].map(el => el.textContent || '');
+    const changes = document.getElementById('changes-panel');
+    const listCount = document.querySelectorAll('#changes-list .change-row, .file-card').length;
+    return {
+      listCount,
+      changesOpen: !!(changes && !changes.hidden),
+      hasPendingChip: chips.some(text => /pending|menunggu|waiting/i.test(text)),
+    };
+  });
+  check('待发送变更在推送前可见', pendingVisible.listCount >= 2 && (pendingVisible.changesOpen || pendingVisible.hasPendingChip),
+    JSON.stringify(pendingVisible));
+
+  const checkboxCount = await page.locator('.file-card input[type=checkbox], .list-row input[type=checkbox]').count();
+  check('文件可选中', checkboxCount >= 2, `${checkboxCount} 个复选框`);
+
+  await clickPush(page);
+
   let links = [];
   for (let i = 0; i < 60; i++) {
-    links = await page.evaluate(() => {
-      const found = new Set();
-      document.querySelectorAll('input,textarea').forEach(el => {
-        const v = el.value || '';
-        const m = v.match(/\/file\/[A-Za-z0-9_.\-]+/g);
-        if (m) m.forEach(x => found.add(x));
-      });
-      document.querySelectorAll('a[href*="/file/"], img[src*="/file/"]').forEach(el => {
-        const v = el.getAttribute('href') || el.getAttribute('src');
-        const m = v && v.match(/\/file\/[A-Za-z0-9_.\-]+/);
-        if (m) found.add(m[0]);
-      });
-      const text = document.body.innerText.match(/\/file\/[A-Za-z0-9_.\-]+/g);
-      if (text) text.forEach(x => found.add(x));
-      return [...found];
-    });
+    links = await collectFileLinks(page);
     if (links.length >= 2) break;
     await page.waitForTimeout(500);
   }
   check('批量上传两个文件后出现两条结果链接', links.length >= 2, `找到 ${links.length} 条: ${links.join(', ')}`);
+
+  const afterPushState = await page.evaluate(() => {
+    const chips = [...document.querySelectorAll('[data-role="status"]')].map(el => (el.textContent || '').toLowerCase());
+    return {
+      cards: document.querySelectorAll('.file-card, .list-row[data-id]').length,
+      synced: chips.filter(text => /synced|tersimpan/.test(text)).length,
+    };
+  });
+  check('推送成功后文件仍可见且标记为已同步', afterPushState.cards >= 2 && afterPushState.synced >= 1,
+    JSON.stringify(afterPushState));
+
+  const firstCard = page.locator('.file-card, .list-row[data-id]').first();
+  if (await firstCard.count()) {
+    await firstCard.click();
+    const previewOpen = await page.locator('#preview-dialog.open, #preview-dialog:not([hidden])').count();
+    check('点击文件打开预览', previewOpen > 0);
+    const copyBtn = page.locator('#preview-copy');
+    if (await copyBtn.count()) {
+      await copyBtn.click({ timeout: 2000 }).catch(() => {});
+    }
+    await page.keyboard.press('Escape');
+  }
+
   await page.screenshot({ path: path.join(OUT, 'shot-2-uploaded.png'), fullPage: true });
 
   // --- 4. uploaded files are really retrievable and are the bytes we sent
@@ -145,7 +204,6 @@ function makePng(file, rgb) {
   const formats = await page.evaluate(() => {
     const out = {};
     const all = document.body.innerText;
-    // buttons/tabs that switch the copy format
     const labels = [...document.querySelectorAll('button,[role=tab],label,a,select option')]
       .map(el => (el.innerText || el.value || '').trim()).filter(Boolean);
     out.labels = labels;
@@ -158,7 +216,6 @@ function makePng(file, rgb) {
   check('提供 BBCode 格式', formats.hasBBCode);
   check('提供 HTML 格式', formats.hasHtml);
 
-  // click through format switchers and capture the produced text
   const formatSamples = {};
   for (const name of ['markdown', 'bbcode', 'html', 'url']) {
     const btn = page.locator(`button:has-text("${name}"), [role=tab]:has-text("${name}")`).first();
@@ -184,12 +241,11 @@ function makePng(file, rgb) {
 
   await page.screenshot({ path: path.join(OUT, 'shot-3-formats.png'), fullPage: true });
 
-  // --- 6. drag & drop upload
+  // --- 6. drag & drop stages a file; push sends it
   const f3 = makePng(path.join(OUT, 'e2e-c.png'), [0, 200, 0]);
   const b64 = fs.readFileSync(f3).toString('base64');
   const beforeDrop = links.length;
   const dropTarget = await page.evaluate(() => {
-    // find the element that registers a drop handler, fall back to body
     const cands = ['#dropzone', '#drop-zone', '.drop-zone', '[data-drop]', '.upload-area', 'main', 'body'];
     for (const c of cands) if (document.querySelector(c)) return c;
     return 'body';
@@ -205,18 +261,15 @@ function makePng(file, rgb) {
     }
   }, { b64, sel: dropTarget });
 
+  await page.waitForTimeout(400);
+  const afterDropBeforePush = (await collectFileLinks(page)).length;
+  check('拖拽后不会立即上传', afterDropBeforePush === beforeDrop,
+    `拖拽前 ${beforeDrop} 条 → 拖拽后立刻 ${afterDropBeforePush} 条`);
+  await clickPush(page);
+
   let afterDrop = beforeDrop;
   for (let i = 0; i < 40; i++) {
-    const now = await page.evaluate(() => {
-      const found = new Set();
-      const t = document.body.innerText.match(/\/file\/[A-Za-z0-9_.\-]+/g);
-      if (t) t.forEach(x => found.add(x));
-      document.querySelectorAll('input,textarea').forEach(el => {
-        const m = (el.value || '').match(/\/file\/[A-Za-z0-9_.\-]+/g);
-        if (m) m.forEach(x => found.add(x));
-      });
-      return found.size;
-    });
+    const now = (await collectFileLinks(page)).length;
     if (now > beforeDrop) { afterDrop = now; break; }
     await page.waitForTimeout(500);
   }
