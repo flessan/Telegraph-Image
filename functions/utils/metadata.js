@@ -31,6 +31,9 @@ export function normalizeMetadata(metadata, id) {
     fileSize: metadata.fileSize || 0,
     ...(metadata.provider ? { provider: metadata.provider } : {}),
     ...(metadata.shortId ? { shortId: metadata.shortId } : {}),
+    // Album membership is purely organizational: it never affects storage
+    // keys, public URLs or moderation. Absent for objects that live at the root.
+    ...(metadata.albumId ? { albumId: metadata.albumId } : {}),
   };
 }
 

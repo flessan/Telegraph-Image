@@ -103,6 +103,22 @@
         </div>
 
         <div class="nav-group">
+          <div class="nav-section-row">
+            <h2 class="nav-section-label" data-i18n="navAlbums">Albums</h2>
+            <button class="icon-btn sm" id="album-new" data-i18n-aria="newAlbum" data-i18n-title="newAlbum">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M12 6v12M6 12h12"/></svg>
+            </button>
+          </div>
+          <button class="nav-item" data-view="albums">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 8.2A2.2 2.2 0 0 1 5.7 6h3.1l1.8 1.8h7.7A2.2 2.2 0 0 1 20.5 10v7.3a2.2 2.2 0 0 1-2.2 2.2H5.7a2.2 2.2 0 0 1-2.2-2.2z"/></svg>
+            <span class="nav-label" data-i18n="albumRoot">Root</span>
+            <span class="nav-count" id="count-albums">0</span>
+          </button>
+          <ul class="album-tree" id="album-tree" role="tree" data-i18n-aria="albumTreeAria"></ul>
+          <p class="album-nav-empty" id="album-nav-empty" data-i18n="albumTreeEmpty">No albums yet. Create one to group objects.</p>
+        </div>
+
+        <div class="nav-group">
           <h2 class="nav-section-label" data-i18n="metaModeration">Moderation</h2>
           <button class="nav-item" data-view="whitelist">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 3v6c0 5-3.4 8-8 9-4.6-1-8-4-8-9V6z"/><path d="M9 12l2 2 4-4"/></svg>
@@ -189,6 +205,7 @@
   </div>
 
   <!-- Live region for a11y announcements -->
+  <div id="drag-hint" class="drag-hint" hidden aria-hidden="true"></div>
   <div id="live" class="sr-only" aria-live="polite"></div>
 
   <script type="module" src="/js/admin.js"></script>

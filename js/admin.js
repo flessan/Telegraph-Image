@@ -2,6 +2,11 @@ import {
   applyStaticI18n, detectLanguage, getLanguage, initI18n,
   onLanguageChange, setLanguage, t,
 } from './i18n.js';
+import {
+  ancestorIds, canMove, childrenOf, countObjects, flattenTree, indexAlbums,
+  normalizeAlbum, objectsIn, pathLabel, pathOf, resolveAlbumId, subtreeIds,
+  validateName,
+} from './albums.js';
 
 /* ------------------------------------------------------------------ *
  * Remote Storage Console
@@ -23,7 +28,11 @@ const state = {
   listComplete: false,
   loading: false,
   loadError: false,
-  view: 'overview',    // overview | all | images | recent | whitelist | blacklist
+  view: 'overview',    // overview | all | images | albums | recent | whitelist | blacklist
+  albums: [],          // remote album records
+  albumsLoaded: false,
+  albumId: null,       // album currently open in the Albums view
+  expanded: new Set(), // expanded nodes of the console album tree
   layout: 'grid',      // grid | list | waterfall
   sort: 'dateDesc',
   query: '',
@@ -341,8 +350,13 @@ function renderChrome() {
   $('count-images').textContent = c.images;
   $('count-white').textContent = c.white;
   $('count-block').textContent = c.block;
+  const albumCount = $('count-albums');
+  if (albumCount) albumCount.textContent = String(state.albums.length);
+  renderAlbumTree();
   document.querySelectorAll('.nav-item').forEach(b => {
-    b.setAttribute('aria-current', b.dataset.view === state.view ? 'page' : 'false');
+    const current = b.dataset.view === state.view
+      && (b.dataset.view !== 'albums' || !currentAlbumId());
+    b.setAttribute('aria-current', current ? 'page' : 'false');
   });
 
   // footer
@@ -373,6 +387,7 @@ function render() {
     return;
   }
   if (state.view === 'overview') { renderOverview(main); return; }
+  if (state.view === 'albums') { renderAlbumsView(main); return; }
   renderBrowser(main);
 }
 
@@ -570,6 +585,7 @@ function renderBrowser(main) {
   main.querySelector('#empty-retry')?.addEventListener('click', () => loadPage(true));
 
   bindObjectCards(browser);
+  bindObjectDragSources(browser);
   renderBulkBar();
 }
 
@@ -729,6 +745,7 @@ function renderBulkBar() {
     bar.className = 'bulk-bar';
     bar.innerHTML = `
       <span class="bulk-count" id="bulk-count"></span>
+      <button data-bulk="album" data-i18n="bulkMoveAlbum"></button>
       <button data-bulk="copy" data-i18n="bulkCopy"></button>
       <button data-bulk="white" data-i18n="bulkWhitelist"></button>
       <button data-bulk="block" data-i18n="bulkBlacklist"></button>
@@ -741,6 +758,7 @@ function renderBulkBar() {
       if (!btn) return;
       if (btn.dataset.bulk === 'clear') return clearSelection();
       if (btn.dataset.bulk === 'copy') return bulkCopy();
+      if (btn.dataset.bulk === 'album') return openMoveDialog({ objects: selectedObjects() });
       if (btn.dataset.bulk === 'white') return bulkModerate('White');
       if (btn.dataset.bulk === 'block') return bulkModerate('Block');
       if (btn.dataset.bulk === 'download') return bulkDownload();
@@ -772,6 +790,8 @@ function openObjectMenu(anchor, id) {
     { label: t('copyHtml'), fn: () => copyText(linkFor(obj, 'html')) },
     { label: t('download'), fn: () => downloadObject(obj) },
     { label: t('rename'), fn: () => openRename(obj) },
+    { label: t('moveToAlbum'), fn: () => openMoveDialog({ objects: [obj] }) },
+    ...(objectAlbumId(obj) ? [{ label: t('openAlbum'), fn: () => openAlbumView(objectAlbumId(obj)) }] : []),
     { sep: true },
     { label: t('whitelist'), fn: () => moderate(obj, 'White') },
     { label: t('blacklist'), danger: true, fn: () => moderate(obj, 'Block') },
@@ -859,6 +879,7 @@ function openDetail(id) {
         <dt>${t('metaSize')}</dt><dd>${esc(formatBytes(o.metadata?.fileSize))}</dd>
         <dt>${t('metaAdded')}</dt><dd>${esc(fullDate(o.metadata?.TimeStamp))}</dd>
         <dt>${t('metaModeration')}</dt><dd>${moderationChip(o) || esc(t('moderationNone'))}</dd>
+        <dt>${t('metaAlbum')}</dt><dd>${objectAlbumId(o) ? esc(albumCrumbLabel(objectAlbumId(o))) : esc(t('albumUnfiled'))}</dd>
         ${o.metadata?.provider ? `<dt>${t('metaProvider')}</dt><dd>${esc(o.metadata.provider)}</dd>` : ''}
       </dl>
     </section>
@@ -874,6 +895,7 @@ function openDetail(id) {
   acts.innerHTML = `
     <div class="sheet-action-group">
       <button class="btn btn-tonal btn-sm" id="d-rename">${t('rename')}</button>
+      <button class="btn btn-tonal btn-sm" id="d-album">${t('moveToAlbum')}</button>
       <button class="btn btn-tonal btn-sm" id="d-like">${likeLabel}</button>
     </div>
     <div class="sheet-action-group">
@@ -889,6 +911,7 @@ function openDetail(id) {
   body.querySelector('#d-copy-2').onclick = () => copyText(publicUrl(o));
   body.querySelector('#d-download').onclick = () => downloadObject(o);
   acts.querySelector('#d-rename').onclick = () => openRename(o);
+  acts.querySelector('#d-album').onclick = () => openMoveDialog({ objects: [o] });
   acts.querySelector('#d-like').onclick = () => toggleLike(o);
   acts.querySelector('#d-white').onclick = () => moderate(o, 'White');
   acts.querySelector('#d-block').onclick = () => moderate(o, 'Block');
@@ -1040,6 +1063,8 @@ async function checkBroken() {
 /* ----------------------------- dialog ---------------------------- */
 let dialogResolver = null;
 function openConfirm({ title, body, confirmText, danger, extra }) {
+  // Focus returns to whatever opened the dialog once it closes.
+  const opener = document.activeElement;
   return new Promise((resolve) => {
     const scrim = $('dialog-scrim');
     const dlg = $('dialog');
@@ -1065,6 +1090,7 @@ function openConfirm({ title, body, confirmText, danger, extra }) {
       scrim.classList.remove('open'); dlg.classList.remove('open');
       setTimeout(() => { scrim.hidden = true; dlg.hidden = true; }, 220);
       dialogResolver = null;
+      if (opener && typeof opener.focus === 'function' && document.contains(opener)) opener.focus();
       resolve(val);
     };
     dialogResolver = cleanup;
@@ -1116,13 +1142,665 @@ function hideBackdrop() {
   setTimeout(() => { b.hidden = true; }, 220);
 }
 
+/* ==================================================================== *
+ * Albums (remote)
+ *
+ * The console manages exactly the same hierarchy as the public workspace,
+ * but always shows remote state: album records come from
+ * /api/manage/albums and memberships from the object metadata already
+ * loaded. Counts therefore describe the loaded page of the index, never a
+ * claimed global total. Moving an object between albums never touches its
+ * id, public URL, storage location or moderation flags.
+ * ==================================================================== */
+
+function albumIndex() { return indexAlbums(state.albums); }
+function albumById(id) { return albumIndex().get(id) || null; }
+function currentAlbumId() { return resolveAlbumId(albumIndex(), state.albumId); }
+function albumChildren(id) { return childrenOf(state.albums, id, getLanguage()); }
+function albumShortPath(id) {
+  if (!id) return t('albumRoot');
+  return pathLabel(albumIndex(), id) || t('albumRoot');
+}
+function albumCrumbLabel(id) {
+  return pathLabel(albumIndex(), id, { rootLabel: t('albumRoot') });
+}
+function objectAlbumId(o) {
+  return resolveAlbumId(albumIndex(), o.metadata && o.metadata.albumId);
+}
+function albumObjects(id) {
+  return objectsIn(state.objects, id, { getAlbumId: (o) => (o.metadata || {}).albumId, index: albumIndex() });
+}
+function albumLoadedCount(id, recursive) {
+  return countObjects(state.objects, id, {
+    getAlbumId: (o) => resolveAlbumId(albumIndex(), (o.metadata || {}).albumId),
+    albums: state.albums,
+    recursive,
+  });
+}
+function albumErrorMessage(code) {
+  const keys = {
+    name_required: 'albumErrorName',
+    name_too_long: 'albumErrorNameLong',
+    name_invalid: 'albumErrorNameInvalid',
+    duplicate_name: 'albumErrorDuplicate',
+    parent_not_found: 'albumErrorParentMissing',
+    album_not_found: 'albumErrorParentMissing',
+    self_parent: 'albumErrorSelf',
+    cycle: 'albumErrorCycle',
+    too_deep: 'albumErrorDepth',
+  };
+  return t(keys[code] || 'albumErrorGeneric');
+}
+
+async function albumRequest(path, options = {}) {
+  const res = await api(path, {
+    ...options,
+    headers: { ...(options.body ? { 'Content-Type': 'application/json' } : {}), ...(options.headers || {}) },
+  });
+  let data = null;
+  try { data = await res.json(); } catch (_) { /* empty body */ }
+  if (!res.ok) {
+    const error = new Error((data && data.error) || 'http ' + res.status);
+    error.code = data && data.error;
+    throw error;
+  }
+  return data;
+}
+
+async function loadAlbums() {
+  try {
+    const data = await albumRequest('/api/manage/albums');
+    state.albums = (data.albums || []).map(normalizeAlbum).filter(Boolean);
+    state.albumsLoaded = true;
+    return true;
+  } catch (err) {
+    if (err instanceof AuthError) { handleSessionExpired(); return false; }
+    state.albumsLoaded = false;
+    snackbar(t('albumsLoadFailed'), { isError: true, action: t('retry'), onAction: loadAlbums });
+    return false;
+  }
+}
+
+function openAlbumView(id) {
+  state.view = 'albums';
+  state.albumId = id || null;
+  if (id) ancestorIds(albumIndex(), id).forEach((parent) => state.expanded.add(parent));
+  savePrefs({ adminView: 'albums', albumId: state.albumId });
+  closeMobileNav();
+  render();
+  announce(t('albumOpened', { name: albumCrumbLabel(state.albumId) }));
+}
+
+async function createAlbumRemote(parentId) {
+  const host = document.createElement('div');
+  const field = document.createElement('label');
+  field.className = 'field';
+  field.innerHTML = `<span class="field-label">${esc(t('albumNameLabel'))}</span>
+    <input class="field-control" id="album-name-input" type="text" maxlength="64" autocomplete="off">
+    <span class="field-error" id="album-name-error"></span>`;
+  const context = document.createElement('p');
+  context.className = 'dialog-context';
+  context.textContent = t('albumCreateIn', { path: albumCrumbLabel(parentId || null) });
+  host.append(context, field);
+
+  const ok = await openConfirm({ title: t('newAlbum'), body: '', confirmText: t('create'), extra: host });
+  if (!ok) return null;
+  const value = host.querySelector('#album-name-input').value;
+  const check = validateName(value);
+  if (!check.ok) { snackbar(albumErrorMessage(check.error), { isError: true }); return null; }
+  const local = canMove(state.albums, null, parentId || null, check.name);
+  if (!local.ok) { snackbar(albumErrorMessage(local.error), { isError: true }); return null; }
+  try {
+    const data = await albumRequest('/api/manage/albums', {
+      method: 'POST',
+      body: JSON.stringify({ name: check.name, parentId: parentId || null }),
+    });
+    state.albums.push(normalizeAlbum({ ...data.album, synced: true }));
+    if (parentId) state.expanded.add(parentId);
+    snackbar(t('albumCreated', { name: data.album.name }));
+    render();
+    return data.album;
+  } catch (err) {
+    if (err instanceof AuthError) return handleSessionExpired();
+    snackbar(albumErrorMessage(err.code), { isError: true });
+    return null;
+  }
+}
+
+async function renameAlbumRemote(album) {
+  const host = document.createElement('div');
+  const field = document.createElement('label');
+  field.className = 'field';
+  field.innerHTML = `<span class="field-label">${esc(t('albumNameLabel'))}</span>
+    <input class="field-control" id="album-name-input" type="text" maxlength="64" autocomplete="off">`;
+  const context = document.createElement('p');
+  context.className = 'dialog-context';
+  context.textContent = t('albumPathLabel', { path: albumCrumbLabel(album.id) });
+  host.append(context, field);
+  const input = field.querySelector('input');
+  input.value = album.name;
+
+  const ok = await openConfirm({ title: t('renameAlbum'), body: '', confirmText: t('save'), extra: host });
+  if (!ok) return;
+  const check = validateName(input.value);
+  if (!check.ok) return snackbar(albumErrorMessage(check.error), { isError: true });
+  try {
+    const data = await albumRequest('/api/manage/albums/' + encodeURIComponent(album.id), {
+      method: 'PATCH',
+      body: JSON.stringify({ name: check.name }),
+    });
+    // The id is unchanged, so children and object memberships stay intact.
+    state.albums = state.albums.map((a) => (a.id === album.id ? normalizeAlbum({ ...data.album, synced: true }) : a));
+    snackbar(t('albumRenamed', { name: data.album.name }));
+    render();
+  } catch (err) {
+    if (err instanceof AuthError) return handleSessionExpired();
+    snackbar(albumErrorMessage(err.code), { isError: true });
+  }
+}
+
+async function moveAlbumRemote(id, parentId) {
+  const album = albumById(id);
+  if (!album) return;
+  const check = canMove(state.albums, id, parentId || null, album.name);
+  if (!check.ok) return snackbar(albumErrorMessage(check.error), { isError: true });
+  const previous = state.albums.slice();
+  state.albums = state.albums.map((a) => (a.id === id ? { ...a, parentId: check.parentId } : a));
+  render();
+  try {
+    await albumRequest('/api/manage/albums/' + encodeURIComponent(id), {
+      method: 'PATCH',
+      body: JSON.stringify({ parentId: check.parentId }),
+    });
+    snackbar(t('albumMoved', { name: album.name, target: albumShortPath(check.parentId) }));
+  } catch (err) {
+    state.albums = previous; // optimistic move rolled back
+    render();
+    if (err instanceof AuthError) return handleSessionExpired();
+    snackbar(albumErrorMessage(err.code), { isError: true });
+  }
+}
+
+async function deleteAlbumRemote(album) {
+  const objects = albumLoadedCount(album.id, true);
+  const children = albumChildren(album.id).length;
+  const ok = await openConfirm({
+    title: t('deleteAlbumTitle', { name: album.name }),
+    body: children ? t('deleteAlbumBodyNested', { n: objects, c: children }) : t('deleteAlbumBody', { n: objects }),
+    confirmText: t('deleteAlbumConfirm'),
+    danger: true,
+  });
+  if (!ok) return;
+  try {
+    await albumRequest('/api/manage/albums/' + encodeURIComponent(album.id), { method: 'DELETE' });
+    await loadAlbums();
+    if (state.albumId === album.id) state.albumId = album.parentId || null;
+    snackbar(t('albumDeleted', { name: album.name }));
+    render();
+  } catch (err) {
+    if (err instanceof AuthError) return handleSessionExpired();
+    snackbar(albumErrorMessage(err.code), { isError: true });
+  }
+}
+
+async function assignObjectsToAlbum(objs, albumId) {
+  const ids = objs.map((o) => o.name);
+  if (!ids.length) return;
+  const target = albumId || null;
+  const previous = objs.map((o) => ({ name: o.name, albumId: (o.metadata || {}).albumId || null }));
+  // Optimistic: the browser shows the new placement immediately and rolls back
+  // if the server refuses. Nothing else about the object is touched.
+  for (const o of objs) upsertObject(o.name, { metadata: { albumId: target || undefined } });
+  render();
+  try {
+    await albumRequest('/api/manage/albums/assign', {
+      method: 'POST',
+      body: JSON.stringify({ albumId: target, ids }),
+    });
+    snackbar(ids.length === 1
+      ? t('objectMoved', { name: objs[0].metadata?.fileName || objs[0].name, target: albumShortPath(target) })
+      : t('objectsMoved', { n: ids.length, target: albumShortPath(target) }));
+    if (state.detailId && ids.includes(state.detailId)) openDetail(state.detailId);
+  } catch (err) {
+    for (const entry of previous) upsertObject(entry.name, { metadata: { albumId: entry.albumId || undefined } });
+    render();
+    if (err instanceof AuthError) return handleSessionExpired();
+    snackbar(albumErrorMessage(err.code), { isError: true });
+  }
+}
+
+/* --------------------------- move dialog -------------------------- */
+
+async function openMoveDialog({ objects, albumId }) {
+  const subjectName = objects
+    ? (objects.length === 1 ? (objects[0].metadata?.fileName || objects[0].name) : t('bulkBar', { n: objects.length }))
+    : (albumById(albumId) || {}).name;
+  const start = objects
+    ? ((objects[0].metadata || {}).albumId || null)
+    : (albumById(albumId) || {}).parentId || null;
+
+  const host = document.createElement('div');
+  const context = document.createElement('p');
+  context.className = 'dialog-context';
+  context.textContent = t('moveSubject', { name: subjectName || '' });
+  const picker = document.createElement('ul');
+  picker.className = 'album-picker';
+  picker.setAttribute('role', 'tree');
+  picker.setAttribute('aria-label', t('albumPickerAria'));
+  const note = document.createElement('p');
+  note.className = 'dialog-note';
+  host.append(context, picker, note);
+
+  let target = resolveAlbumId(albumIndex(), start);
+
+  const invalidFor = (id) => {
+    if (objects) return null;
+    const album = albumById(albumId);
+    const check = canMove(state.albums, albumId, id, album ? album.name : undefined);
+    return check.ok ? null : check.error;
+  };
+
+  const paint = () => {
+    picker.replaceChildren();
+    const rows = [{ id: null, name: t('albumRoot'), depth: 0 }].concat(
+      flattenTree(state.albums, { locale: getLanguage() }).map(({ album, depth }) => ({
+        id: album.id, name: album.name, depth: depth + 1,
+      })),
+    );
+    for (const row of rows) {
+      const li = document.createElement('li');
+      li.setAttribute('role', 'treeitem');
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'album-picker-row' + (target === row.id ? ' selected' : '');
+      btn.style.paddingInlineStart = (12 + row.depth * 16) + 'px';
+      const invalid = invalidFor(row.id);
+      btn.disabled = !!invalid;
+      if (invalid) btn.title = albumErrorMessage(invalid);
+      btn.setAttribute('aria-selected', target === row.id ? 'true' : 'false');
+      btn.innerHTML = `<span class="album-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M3.5 8.2A2.2 2.2 0 0 1 5.7 6h3.1l1.8 1.8h7.7A2.2 2.2 0 0 1 20.5 10v7.3a2.2 2.2 0 0 1-2.2 2.2H5.7a2.2 2.2 0 0 1-2.2-2.2z"/></svg></span>
+        <span class="album-picker-name">${esc(row.name)}</span>` +
+        (row.id === start ? `<span class="album-picker-chip">${esc(t('currentLocation'))}</span>` : '');
+      btn.onclick = () => { target = row.id; paint(); };
+      li.appendChild(btn);
+      picker.appendChild(li);
+    }
+    note.textContent = t('movePickerNote', { path: albumCrumbLabel(target) });
+  };
+  paint();
+
+  const ok = await openConfirm({
+    title: objects ? t('moveToAlbum') : t('moveAlbum'),
+    body: '',
+    confirmText: t('moveHere'),
+    extra: host,
+  });
+  if (!ok) return;
+  if (objects) await assignObjectsToAlbum(objects, target);
+  else await moveAlbumRemote(albumId, target);
+}
+
+/* ---------------------------- rendering --------------------------- */
+
+function folderSvg() {
+  return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M3.5 8.2A2.2 2.2 0 0 1 5.7 6h3.1l1.8 1.8h7.7A2.2 2.2 0 0 1 20.5 10v7.3a2.2 2.2 0 0 1-2.2 2.2H5.7a2.2 2.2 0 0 1-2.2-2.2z"/></svg>';
+}
+
+function renderAlbumTree() {
+  const tree = $('album-tree');
+  const empty = $('album-nav-empty');
+  if (!tree) return;
+  const rows = flattenTree(state.albums, { expanded: state.expanded, locale: getLanguage() });
+  if (empty) empty.hidden = rows.length > 0;
+  tree.replaceChildren();
+
+  rows.forEach(({ album, depth, hasChildren }) => {
+    const li = document.createElement('li');
+    li.className = 'album-row' + (state.view === 'albums' && currentAlbumId() === album.id ? ' active' : '');
+    li.setAttribute('role', 'treeitem');
+    li.dataset.albumId = album.id;
+    li.setAttribute('aria-level', String(depth + 1));
+    li.tabIndex = -1;
+    if (hasChildren) li.setAttribute('aria-expanded', state.expanded.has(album.id) ? 'true' : 'false');
+
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'album-row-btn';
+    btn.style.paddingInlineStart = (8 + depth * 14) + 'px';
+    btn.tabIndex = -1;
+
+    const twisty = document.createElement('span');
+    twisty.className = 'album-twisty' + (state.expanded.has(album.id) ? ' open' : '') + (hasChildren ? '' : ' placeholder');
+    twisty.setAttribute('aria-hidden', 'true');
+    twisty.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>';
+    if (hasChildren) {
+      twisty.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (state.expanded.has(album.id)) state.expanded.delete(album.id);
+        else state.expanded.add(album.id);
+        renderAlbumTree();
+      });
+    }
+    btn.appendChild(twisty);
+
+    const icon = document.createElement('span');
+    icon.className = 'album-icon';
+    icon.setAttribute('aria-hidden', 'true');
+    icon.innerHTML = folderSvg();
+    btn.appendChild(icon);
+
+    const name = document.createElement('span');
+    name.className = 'album-row-name';
+    name.textContent = album.name;
+    btn.appendChild(name);
+
+    const count = albumLoadedCount(album.id, false);
+    if (count) {
+      const badge = document.createElement('span');
+      badge.className = 'album-row-count';
+      badge.textContent = String(count);
+      badge.title = t('albumRemoteHint');
+      btn.appendChild(badge);
+    }
+
+    btn.addEventListener('click', () => openAlbumView(album.id));
+    li.appendChild(btn);
+    li.draggable = true;
+    li.addEventListener('dragstart', (e) => startAlbumDrag(e, album.id));
+    li.addEventListener('dragend', endDrag);
+    li.addEventListener('keydown', (e) => onAlbumTreeKey(e, album.id));
+    attachAlbumDropTarget(li, album.id);
+    tree.appendChild(li);
+  });
+
+  const rowEls = Array.from(tree.querySelectorAll('.album-row'));
+  const activeIndex = Math.max(0, rowEls.findIndex((el) => el.classList.contains('active')));
+  rowEls.forEach((el, i) => { el.tabIndex = i === activeIndex ? 0 : -1; });
+}
+
+function onAlbumTreeKey(event, id) {
+  const rows = Array.from(document.querySelectorAll('#album-tree .album-row'));
+  const index = rows.findIndex((row) => row.dataset.albumId === id);
+  const focus = (el) => { if (el) { rows.forEach((r) => { r.tabIndex = -1; }); el.tabIndex = 0; el.focus(); } };
+  if (event.key === 'ArrowDown') { event.preventDefault(); focus(rows[index + 1]); }
+  else if (event.key === 'ArrowUp') { event.preventDefault(); focus(rows[index - 1]); }
+  else if (event.key === 'ArrowRight') {
+    event.preventDefault();
+    if (albumChildren(id).length && !state.expanded.has(id)) { state.expanded.add(id); renderAlbumTree(); }
+    else focus(rows[index + 1]);
+  } else if (event.key === 'ArrowLeft') {
+    event.preventDefault();
+    if (state.expanded.has(id)) { state.expanded.delete(id); renderAlbumTree(); }
+    else {
+      const parent = (albumById(id) || {}).parentId;
+      focus(rows.find((r) => r.dataset.albumId === parent));
+    }
+  } else if (event.key === 'Enter' || event.key === ' ') {
+    event.preventDefault();
+    openAlbumView(id);
+  } else if (event.key === 'F2') {
+    event.preventDefault();
+    const album = albumById(id);
+    if (album) renameAlbumRemote(album);
+  }
+}
+
+function albumCrumbsHtml() {
+  const chain = pathOf(albumIndex(), currentAlbumId());
+  const parts = [`<button class="crumb-link" data-crumb="root">${esc(t('albumRoot'))}</button>`];
+  chain.forEach((album, i) => {
+    const last = i === chain.length - 1;
+    parts.push(last
+      ? `<span class="crumb-current" aria-current="page">${esc(album.name)}</span>`
+      : `<button class="crumb-link" data-crumb="${esc(album.id)}">${esc(album.name)}</button>`);
+  });
+  return `<nav class="album-crumbs" aria-label="${esc(t('albumPathLabel', { path: albumCrumbLabel(currentAlbumId()) }))}">
+    ${parts.join('<span class="sep" aria-hidden="true">/</span>')}
+  </nav>`;
+}
+
+function albumCardHtml(album) {
+  const objects = albumLoadedCount(album.id, true);
+  const subs = albumChildren(album.id).length;
+  const cover = state.objects.find((o) => o._kind === 'image' && subtreeIds(state.albums, album.id).has(objectAlbumId(o) || ''));
+  const media = cover
+    ? `<img src="/file/${esc(cover.name)}" alt="" loading="lazy">`
+    : `<span class="album-icon" aria-hidden="true">${folderSvg()}</span>`;
+  return `<article class="album-card" data-album-card="${esc(album.id)}" tabindex="0" role="button"
+      aria-label="${esc(t('openAlbumAria', { name: album.name }))}" draggable="true">
+    <div class="album-cover ${cover ? '' : 'placeholder'}">${media}</div>
+    <div class="album-card-body">
+      <span class="album-card-name" title="${esc(album.name)}">${esc(album.name)}</span>
+      <span class="album-card-meta">${esc(!objects && !subs ? t('albumEmptyMeta') : t('albumCountRemote', { n: objects }))}${subs ? ' · ' + esc(t('albumSubcount', { n: subs })) : ''}</span>
+    </div>
+    <div class="album-card-actions">
+      <button class="icon-btn" data-album-menu="${esc(album.id)}" aria-label="${esc(t('albumMenuAria', { name: album.name }))}">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true"><circle cx="6" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="18" cy="12" r="1.6"/></svg>
+      </button>
+    </div>
+  </article>`;
+}
+
+function renderAlbumsView(main) {
+  const albumId = currentAlbumId();
+  const album = albumById(albumId);
+  const children = albumChildren(albumId);
+  const objects = sortObjects(albumObjects(albumId).filter((o) => {
+    const q = state.query.trim().toLowerCase();
+    if (!q) return true;
+    return (o.name || '').toLowerCase().includes(q)
+      || (o.metadata?.fileName || '').toLowerCase().includes(q)
+      || albumShortPath(objectAlbumId(o)).toLowerCase().includes(q);
+  }));
+
+  main.innerHTML = `
+    <div class="page">
+      <header class="page-head">
+        <div class="page-titles">
+          <h1>${esc(album ? album.name : t('adminAlbumsTitle'))}</h1>
+          <p class="subtitle">${esc(t('adminAlbumsSubtitle'))}</p>
+          ${albumCrumbsHtml()}
+        </div>
+        <div class="page-tools">
+          <button class="btn btn-tonal" id="album-create">${esc(t('newAlbum'))}</button>
+          ${album ? `<button class="btn btn-outlined" id="album-rename">${esc(t('renameAlbum'))}</button>
+          <button class="btn btn-outlined" id="album-move">${esc(t('moveAlbum'))}</button>
+          <button class="btn btn-danger-tonal" id="album-delete">${esc(t('deleteAlbum'))}</button>` : ''}
+        </div>
+      </header>
+
+      <p class="filter-note">${esc(t('albumRemoteHint'))}</p>
+
+      ${children.length ? `<section class="panel album-panel" id="album-children-panel">
+        <div class="panel-head"><h2>${esc(t('albumsInHere'))}</h2></div>
+        <div class="album-grid">${children.map(albumCardHtml).join('')}</div>
+      </section>` : ''}
+
+      <section class="panel album-panel">
+        <div class="panel-head">
+          <h2>${esc(t('objectsInAlbum'))}</h2>
+          <span class="result-count">${esc(t('resultCount', { n: objects.length }))}</span>
+        </div>
+        <div class="browser-region" id="browser" tabindex="-1"></div>
+      </section>
+    </div>`;
+
+  const browser = main.querySelector('#browser');
+  if (!objects.length) {
+    browser.innerHTML = `<div class="state-surface">
+      <h3>${esc(albumId ? t('emptyAlbumTitle') : t('emptyAlbumsTitle'))}</h3>
+      <p>${esc(albumId ? t('emptyAlbumBody') : t('emptyAlbumsBody'))}</p>
+    </div>`;
+  } else if (state.layout === 'list') browser.innerHTML = renderList(objects);
+  else if (state.layout === 'waterfall') browser.innerHTML = renderWaterfall(objects);
+  else browser.innerHTML = renderGrid(objects);
+
+  main.querySelector('#album-create')?.addEventListener('click', () => createAlbumRemote(albumId));
+  main.querySelector('#album-rename')?.addEventListener('click', () => renameAlbumRemote(album));
+  main.querySelector('#album-move')?.addEventListener('click', () => openMoveDialog({ albumId: album.id }));
+  main.querySelector('#album-delete')?.addEventListener('click', () => deleteAlbumRemote(album));
+  main.querySelectorAll('[data-crumb]').forEach((btn) => {
+    btn.addEventListener('click', () => openAlbumView(btn.dataset.crumb === 'root' ? null : btn.dataset.crumb));
+    attachAlbumDropTarget(btn, btn.dataset.crumb === 'root' ? null : btn.dataset.crumb);
+  });
+  main.querySelectorAll('[data-album-card]').forEach((card) => {
+    const id = card.dataset.albumCard;
+    card.addEventListener('click', (e) => { if (!e.target.closest('button')) openAlbumView(id); });
+    card.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openAlbumView(id); }
+    });
+    card.addEventListener('dragstart', (e) => startAlbumDrag(e, id));
+    card.addEventListener('dragend', endDrag);
+    attachAlbumDropTarget(card, id);
+  });
+  main.querySelectorAll('[data-album-menu]').forEach((btn) => {
+    btn.addEventListener('click', (e) => { e.stopPropagation(); openAlbumMenu(btn, btn.dataset.albumMenu); });
+  });
+
+  bindObjectCards(browser);
+  bindObjectDragSources(browser);
+  renderBulkBar();
+}
+
+function openAlbumMenu(anchor, id) {
+  const album = albumById(id);
+  if (!album) return;
+  closeMenu();
+  const menu = document.createElement('div');
+  menu.className = 'menu';
+  const items = [
+    { label: t('openAlbum'), fn: () => openAlbumView(id) },
+    { label: t('createInside'), fn: () => createAlbumRemote(id) },
+    { label: t('renameAlbum'), fn: () => renameAlbumRemote(album) },
+    { label: t('moveAlbum'), fn: () => openMoveDialog({ albumId: id }) },
+    { sep: true },
+    { label: t('deleteAlbum'), danger: true, fn: () => deleteAlbumRemote(album) },
+  ];
+  menu.innerHTML = items.map((it, i) => (it.sep ? '<hr>' :
+    `<button data-i="${i}" class="${it.danger ? 'danger' : ''}"><span>${esc(it.label)}</span></button>`)).join('');
+  document.body.appendChild(menu);
+  const gap = 8;
+  const mw = Math.min(240, window.innerWidth - gap * 2);
+  menu.style.minWidth = mw + 'px';
+  const rect = anchor.getBoundingClientRect();
+  const mh = menu.offsetHeight;
+  let left = Math.max(gap, Math.min(rect.right - mw, window.innerWidth - mw - gap));
+  let top = rect.bottom + 4;
+  if (top + mh + gap > window.innerHeight) top = Math.max(gap, rect.top - mh - 4);
+  menu.style.left = left + 'px';
+  menu.style.top = top + 'px';
+  activeMenu = menu;
+  setTimeout(() => document.addEventListener('click', closeMenu, true), 0);
+  menu.addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-i]');
+    if (!b) return;
+    e.stopPropagation();
+    const it = items[Number(b.dataset.i)];
+    closeMenu();
+    it.fn?.();
+  });
+}
+
+/* --------------------------- drag and drop ------------------------- */
+
+let dragState = null;
+
+function showDragHint(message, invalid) {
+  const hint = $('drag-hint');
+  if (!hint) return;
+  hint.textContent = message;
+  hint.hidden = !message;
+  hint.classList.toggle('invalid', !!invalid);
+}
+function endDrag() {
+  dragState = null;
+  document.body.classList.remove('dragging-internal');
+  const hint = $('drag-hint');
+  if (hint) { hint.hidden = true; hint.textContent = ''; }
+  document.querySelectorAll('.drop-target, .drop-invalid').forEach((el) => el.classList.remove('drop-target', 'drop-invalid'));
+}
+function startAlbumDrag(event, albumId) {
+  dragState = { kind: 'album', albumId };
+  event.stopPropagation();
+  if (event.dataTransfer) {
+    event.dataTransfer.effectAllowed = 'move';
+    try { event.dataTransfer.setData('text/plain', (albumById(albumId) || {}).name || albumId); } catch (_) { /* noop */ }
+  }
+  document.body.classList.add('dragging-internal');
+}
+function startObjectDrag(event, name) {
+  const names = state.selected.has(name) ? Array.from(state.selected) : [name];
+  dragState = { kind: 'objects', names };
+  if (event.dataTransfer) {
+    event.dataTransfer.effectAllowed = 'move';
+    try { event.dataTransfer.setData('text/plain', names.join('\n')); } catch (_) { /* noop */ }
+  }
+  document.body.classList.add('dragging-internal');
+}
+function bindObjectDragSources(scope) {
+  scope.querySelectorAll('[data-id]').forEach((el) => {
+    el.draggable = true;
+    el.addEventListener('dragstart', (e) => startObjectDrag(e, el.dataset.id));
+    el.addEventListener('dragend', endDrag);
+  });
+}
+function dropVerdict(targetId) {
+  if (!dragState) return null;
+  if (dragState.kind === 'album') {
+    if (dragState.albumId === targetId) return { ok: false, message: t('dropInvalidSelf') };
+    const album = albumById(dragState.albumId);
+    const check = canMove(state.albums, dragState.albumId, targetId, album ? album.name : undefined);
+    if (!check.ok) return { ok: false, message: albumErrorMessage(check.error) };
+    return { ok: true, message: t('dropReparent', { name: album ? album.name : '', target: albumShortPath(targetId) }) };
+  }
+  const objs = state.objects.filter((o) => dragState.names.includes(o.name));
+  if (objs.every((o) => (objectAlbumId(o) || null) === (targetId || null))) {
+    return { ok: false, message: t('dropAlreadyHere') };
+  }
+  return { ok: true, message: t('dropMoveHere', { target: albumShortPath(targetId) }) };
+}
+function attachAlbumDropTarget(el, albumId) {
+  const target = albumId || null;
+  el.addEventListener('dragover', (event) => {
+    const verdict = dropVerdict(target);
+    if (!verdict) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = verdict.ok ? 'move' : 'none';
+    el.classList.toggle('drop-target', verdict.ok);
+    el.classList.toggle('drop-invalid', !verdict.ok);
+    showDragHint(verdict.message, !verdict.ok);
+  });
+  el.addEventListener('dragleave', (event) => {
+    if (el.contains(event.relatedTarget)) return;
+    el.classList.remove('drop-target', 'drop-invalid');
+  });
+  el.addEventListener('drop', async (event) => {
+    const verdict = dropVerdict(target);
+    el.classList.remove('drop-target', 'drop-invalid');
+    if (!verdict) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const drag = dragState;
+    endDrag();
+    if (!verdict.ok) { snackbar(verdict.message); return; }
+    if (drag.kind === 'album') await moveAlbumRemote(drag.albumId, target);
+    else await assignObjectsToAlbum(state.objects.filter((o) => drag.names.includes(o.name)), target);
+  });
+}
+
 /* ----------------------- command palette ------------------------- */
 const paletteCommands = () => [
   { id: 'search', label: t('commandFocusSearch'), kbd: '/', run: () => focusSearch() },
   { id: 'grid', label: t('commandGrid'), run: () => { state.layout = 'grid'; savePrefs({ layout: 'grid' }); render(); } },
   { id: 'list', label: t('commandList'), run: () => { state.layout = 'list'; savePrefs({ layout: 'list' }); render(); } },
   { id: 'waterfall', label: t('commandWaterfall'), run: () => { state.layout = 'waterfall'; savePrefs({ layout: 'waterfall' }); render(); } },
-  { id: 'refresh', label: t('commandRefresh'), kbd: 'R', run: () => loadPage(true) },
+  { id: 'refresh', label: t('commandRefresh'), kbd: 'R', run: () => { loadAlbums(); loadPage(true); } },
+  { id: 'album-new', label: t('commandNewAlbum'), run: () => createAlbumRemote(state.view === 'albums' ? currentAlbumId() : null) },
+  { id: 'album-open', label: t('commandOpenAlbums'), run: () => openAlbumView(state.view === 'albums' ? currentAlbumId() : null) },
+  { id: 'album-move', label: t('commandMoveToAlbum'), run: () => { if (state.selected.size) openMoveDialog({ objects: selectedObjects() }); } },
+  { id: 'album-parent', label: t('commandParentAlbum'), run: () => { const a = albumById(currentAlbumId()); openAlbumView(a ? a.parentId : null); } },
+  { id: 'album-root', label: t('commandGoRoot'), run: () => openAlbumView(null) },
   { id: 'open', label: t('commandOpen'), run: () => { const first = filteredObjects()[0]; if (first) openDetail(first.name); } },
   { id: 'copy', label: t('commandCopyUrls'), run: bulkCopy },
   { id: 'white', label: t('commandWhitelist'), run: () => bulkModerate('White') },
@@ -1166,7 +1844,8 @@ function renderPalette(q) {
 /* ----------------------------- view ------------------------------ */
 function setView(v) {
   state.view = v;
-  savePrefs({ adminView: v });
+  if (v === 'albums') state.albumId = null;
+  savePrefs({ adminView: v, albumId: state.albumId });
   closeMobileNav();
   render();
 }
@@ -1230,7 +1909,8 @@ function bindEvents() {
   document.querySelectorAll('.nav-item').forEach(b => b.addEventListener('click', () => setView(b.dataset.view)));
   $('nav-toggle')?.addEventListener('click', toggleMobileNav);
   $('nav-close')?.addEventListener('click', () => { closeMobileNav(); $('nav-toggle')?.focus(); });
-  $('refresh-btn').addEventListener('click', () => loadPage(true));
+  $('refresh-btn').addEventListener('click', () => { loadAlbums(); loadPage(true); });
+  $('album-new')?.addEventListener('click', () => createAlbumRemote(state.view === 'albums' ? currentAlbumId() : null));
   $('theme-btn').addEventListener('click', toggleTheme);
   $('lang-btn').addEventListener('click', cycleLanguage);
   $('logout-btn').addEventListener('click', logout);
@@ -1298,7 +1978,8 @@ async function init() {
   state.theme = detectTheme(prefs);
   state.layout = prefs.layout === 'list' || prefs.layout === 'waterfall' ? prefs.layout : 'grid';
   state.sort = prefs.sort || 'dateDesc';
-  state.view = ['overview', 'all', 'images', 'recent', 'whitelist', 'blacklist'].includes(prefs.adminView) ? prefs.adminView : 'overview';
+  state.view = ['overview', 'all', 'images', 'albums', 'recent', 'whitelist', 'blacklist'].includes(prefs.adminView) ? prefs.adminView : 'overview';
+  state.albumId = typeof prefs.albumId === 'string' ? prefs.albumId : null;
 
   applyTheme();
   bindEvents();
@@ -1316,6 +1997,7 @@ async function init() {
     const session = await checkSession();
     state.authEnabled = session.authEnabled !== false;
     if (!state.authEnabled) snackbar(t('authDisabledConsole'));
+    await loadAlbums();
     await loadPage(true);
   } catch (err) {
     if (err instanceof AuthError) return handleSessionExpired();

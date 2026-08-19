@@ -289,6 +289,9 @@ body { overflow: hidden; }
   margin: 0;
   padding: 0;
   min-width: 0;
+  /* Deep album paths wrap onto a second line instead of pushing the toolbar. */
+  flex-wrap: wrap;
+  row-gap: 2px;
 }
 .crumbs li {
   display: flex;
@@ -994,6 +997,94 @@ body { overflow: hidden; }
 }
 
 .mobile-search-toggle { display: none; }
+
+
+/* ---------- albums in the workspace shell ---------- */
+.album-nav {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-height: 0;
+}
+.album-nav-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: 0 var(--space-2);
+}
+.album-nav-head h2 {
+  margin: 0;
+  font: var(--type-label);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--md-sys-color-on-surface-variant);
+}
+.icon-btn.sm { width: 32px; height: 32px; }
+.icon-btn.sm svg { width: 18px; height: 18px; }
+.album-nav-empty {
+  margin: 0;
+  padding: 0 var(--space-2);
+  font: var(--type-label);
+  color: var(--md-sys-color-on-surface-variant);
+  line-height: 1.45;
+}
+.album-nav-empty[hidden] { display: none; }
+
+.album-sync-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--md-sys-color-secondary-container);
+  color: var(--md-sys-color-on-secondary-container);
+  font: var(--type-label);
+}
+.album-sync-row[hidden] { display: none; }
+.album-sync-row .btn.text { min-height: 32px; padding: 0 8px; color: inherit; }
+
+.album-section { display: flex; flex-direction: column; gap: var(--space-3); }
+.album-section + .album-section { margin-top: var(--space-6); }
+.album-section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+.album-section-head h2 { margin: 0; font: var(--type-title-sm); }
+.album-section-hint { font: var(--type-label); color: var(--md-sys-color-on-surface-variant); }
+
+.crumb-link {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  padding: 2px 6px;
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  max-width: 22ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.crumb-link:hover { background: var(--md-sys-color-surface-container); }
+.crumb-link:focus-visible { outline: none; box-shadow: var(--focus); }
+
+.empty-actions { display: flex; gap: var(--space-2); flex-wrap: wrap; justify-content: center; margin-top: var(--space-4); }
+
+@media (max-width: 1100px) {
+  /* The rail is too narrow for a readable tree; the Albums view keeps the
+     whole hierarchy reachable through cards and breadcrumbs. */
+  .album-nav { display: none; }
+}
+
+@media (max-width: 640px) {
+  .crumb-link { max-width: 12ch; }
+  .drag-hint { bottom: calc(var(--bottom-nav-h) + 16px); }
+}
 
 /* ---------- responsive ---------- */
 @media (max-width: 1100px) {
