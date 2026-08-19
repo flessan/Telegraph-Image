@@ -334,6 +334,7 @@ function moderationChip(o) {
 function renderChrome() {
   applyStaticI18n(document);
   applyTheme();
+  applyLanguageBadge();
   // nav counts
   const c = counts();
   $('count-all').textContent = c.total;
@@ -360,11 +361,15 @@ function render() {
   renderChrome();
   const main = $('main');
   if (!state.ready && state.loading && state.objects.length === 0) {
-    main.innerHTML = `<div class="skeleton-grid">${Array.from({ length: 8 }, () => '<div class="skeleton"></div>').join('')}</div>`;
+    main.innerHTML = `<div class="page"><div class="skeleton-grid">${Array.from({ length: 8 }, () => (
+      '<div class="skeleton"><div class="skeleton-media"></div>' +
+      '<div class="skeleton-lines"><div class="skeleton-line"></div><div class="skeleton-line short"></div></div></div>'
+    )).join('')}</div></div>`;
     return;
   }
   if (!state.ready && state.loadError) {
-    main.innerHTML = stateSurface('error');
+    main.innerHTML = `<div class="page">${stateSurface('error')}</div>`;
+    main.querySelector('#empty-retry')?.addEventListener('click', () => loadPage(true));
     return;
   }
   if (state.view === 'overview') { renderOverview(main); return; }
@@ -395,69 +400,69 @@ function renderOverview(main) {
   const titles = {
     all: t('navAllFiles'), images: t('navImages'), whitelist: t('navWhitelist'), blacklist: t('navBlacklist'),
   };
+  // Every statistic is a plain flow block inside its own card: value, label
+  // and (optionally) an explanatory line. Nothing is positioned.
+  const stats = [
+    { value: c.total, label: t('statObjects'), hint: t('statObjectsHint') },
+    { value: c.images, label: t('statImages') },
+    { value: c.others, label: t('statOthers') },
+    { value: c.white, label: t('statWhitelisted') },
+    { value: c.block, label: t('statBlacklisted') },
+  ];
+
   main.innerHTML = `
-    <div class="page-head">
-      <div>
-        <h1>${t('consoleOverview')}</h1>
-        <div class="subtitle">${t('overviewSubtitle')}</div>
-      </div>
-      <div class="page-tools">
-        <button class="btn btn-tonal" id="ov-refresh">
-          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 1 1-2.2-5.5"/><path d="M20 4v5h-5"/></svg>
-          ${t('refreshRemote')}
-        </button>
-      </div>
+    <div class="page">
+      <header class="page-head">
+        <div class="page-titles">
+          <h1>${t('consoleOverview')}</h1>
+          <p class="subtitle">${t('overviewSubtitle')}</p>
+        </div>
+        <div class="page-tools">
+          <button class="btn btn-tonal" id="ov-refresh">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.2-5.5"/><path d="M20 4v5h-5"/></svg>
+            ${t('refreshRemote')}
+          </button>
+        </div>
+      </header>
+
+      <section class="stat-grid" aria-label="${esc(t('overviewSubtitle'))}">
+        ${stats.map(sItem => `
+          <article class="stat-card">
+            <span class="stat-value">${sItem.value}</span>
+            <span class="stat-label">${sItem.label}</span>
+            ${sItem.hint ? `<span class="stat-hint">${sItem.hint}</span>` : ''}
+          </article>`).join('')}
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>${t('recentObjects')}</h2>
+          <button class="btn btn-text" data-jump="recent">${t('navRecent')}</button>
+        </div>
+        <p class="panel-hint">${t('recentObjectsHint')}</p>
+        <div class="context-list">
+          ${recent.length ? recent.map(overviewRow).join('') : `<div class="state-surface"><p>${t('emptyRemoteBody')}</p></div>`}
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head"><h2>${t('operationalContext')}</h2></div>
+        <p class="panel-hint">${state.listComplete ? t('listComplete') : t('listIncomplete')}</p>
+        <div class="context-list">
+          ${['all', 'images', 'whitelist', 'blacklist'].map(v => `
+            <button class="context-row" data-jump="${v}">
+              <span class="ctx-thumb">${navGlyph(v)}</span>
+              <span class="ctx-meta">
+                <span class="ctx-name">${titles[v]}</span>
+                <span class="ctx-sub">${t('footerLoaded', { n: v === 'all' ? c.total : v === 'images' ? c.images : v === 'whitelist' ? c.white : c.block })}</span>
+              </span>
+              <span class="ctx-trail">
+                <svg class="ctx-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+              </span>
+            </button>`).join('')}
+        </div>
+      </section>
     </div>
-
-    <div class="stat-grid">
-      <div class="card stat-card">
-        <span class="stat-value">${c.total}</span>
-        <span class="stat-label">${t('statObjects')}</span>
-        <span class="stat-hint">${t('statObjectsHint')}</span>
-      </div>
-      <div class="card stat-card">
-        <span class="stat-value">${c.images}</span>
-        <span class="stat-label">${t('statImages')}</span>
-      </div>
-      <div class="card stat-card">
-        <span class="stat-value">${c.others}</span>
-        <span class="stat-label">${t('statOthers')}</span>
-      </div>
-      <div class="card stat-card">
-        <span class="stat-value">${c.white}</span>
-        <span class="stat-label">${t('statWhitelisted')}</span>
-      </div>
-      <div class="card stat-card">
-        <span class="stat-value">${c.block}</span>
-        <span class="stat-label">${t('statBlacklisted')}</span>
-      </div>
-    </div>
-
-    <section class="panel">
-      <div class="panel-head">
-        <h2>${t('recentObjects')}</h2>
-        <button class="btn btn-text" data-jump="recent">${t('navRecent')}</button>
-      </div>
-      <div class="panel-hint">${t('recentObjectsHint')}</div>
-      <div class="context-list">
-        ${recent.length ? recent.map(overviewRow).join('') : `<div class="state-surface"><p>${t('emptyRemoteBody')}</p></div>`}
-      </div>
-    </section>
-
-    <section class="panel">
-      <div class="panel-head"><h2>${t('operationalContext')}</h2></div>
-      <div class="context-list">
-        ${['all','images','whitelist','blacklist'].map(v => `
-          <button class="context-row" data-jump="${v}" style="border:0;width:100%;text-align:left;cursor:pointer">
-            <span class="ctx-thumb">${navGlyph(v)}</span>
-            <span class="ctx-meta">
-              <span class="ctx-name">${titles[v]}</span>
-              <span class="ctx-sub">${t('footerLoaded', { n: v === 'all' ? c.total : v === 'images' ? c.images : v === 'whitelist' ? c.white : c.block })}</span>
-            </span>
-            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M9 6l6 6-6 6"/></svg>
-          </button>`).join('')}
-      </div>
-    </section>
   `;
   main.querySelector('#ov-refresh')?.addEventListener('click', () => loadPage(true));
   main.querySelectorAll('[data-jump]').forEach(b => b.addEventListener('click', () => setView(b.dataset.jump)));
@@ -475,13 +480,14 @@ function navGlyph(v) {
 function overviewRow(o) {
   const thumb = (o._kind === 'image' || o._kind === 'video')
     ? `<img src="/file/${esc(o.name)}" alt="" loading="lazy">` : iconFor(o._kind);
-  return `<button class="context-row" data-id="${esc(o.name)}" style="border:0;width:100%;text-align:left;cursor:pointer">
+  const chip = moderationChip(o);
+  return `<button class="context-row" data-id="${esc(o.name)}">
     <span class="ctx-thumb">${thumb}</span>
     <span class="ctx-meta">
       <span class="ctx-name">${esc(o.metadata?.fileName || o.name)}</span>
       <span class="ctx-sub">${esc(kindLabel(o._kind))} · ${esc(formatWhen(o.metadata?.TimeStamp))} · ${esc(formatBytes(o.metadata?.fileSize))}</span>
     </span>
-    ${moderationChip(o)}
+    <span class="ctx-trail">${chip}</span>
   </button>`;
 }
 
@@ -489,29 +495,41 @@ function renderBrowser(main) {
   const list = filteredObjects();
   const c = counts();
   const clientFiltered = state.view === 'whitelist' || state.view === 'blacklist' || state.view === 'images';
+  const subtitle = viewSubtitle(c);
 
   main.innerHTML = `
-    <div class="page-head">
-      <div>
-        <h1>${viewTitle()}</h1>
-        <div class="subtitle">${viewSubtitle(c)}</div>
-      </div>
-      <div class="page-tools">
-        <div class="segmented" role="group" aria-label="${esc(t('viewGrid'))}">
-          <button data-layout="grid" aria-pressed="${state.layout === 'grid'}" data-i18n-aria="viewGridAria" title="${t('viewGrid')}">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.5"/></svg>
-            <span class="hide-phone">${t('layoutGrid')}</span>
-          </button>
-          <button data-layout="list" aria-pressed="${state.layout === 'list'}" data-i18n-aria="viewListAria" title="${t('viewList')}">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01"/></svg>
-            <span class="hide-phone">${t('layoutList')}</span>
-          </button>
-          <button data-layout="waterfall" aria-pressed="${state.layout === 'waterfall'}" title="${t('layoutWaterfall')}">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><rect x="3.5" y="3.5" width="7" height="10" rx="1.5"/><rect x="13.5" y="3.5" width="7" height="6" rx="1.5"/><rect x="3.5" y="16.5" width="7" height="4" rx="1.5"/><rect x="13.5" y="12.5" width="7" height="8" rx="1.5"/></svg>
-            <span class="hide-phone">${t('layoutWaterfall')}</span>
-          </button>
+    <div class="page">
+      <header class="page-head">
+        <div class="page-titles">
+          <h1>${viewTitle()}</h1>
+          <p class="subtitle">${subtitle}</p>
         </div>
-        <select class="select-field" id="sort-select" aria-label="${t('sortBy')}">
+        <div class="page-tools">
+          <div class="segmented" role="group" data-i18n-aria="viewModeGroup">
+            <button data-layout="grid" aria-pressed="${state.layout === 'grid'}" data-i18n-title="layoutGrid" title="${esc(t('layoutGrid'))}">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="3.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.5"/></svg>
+              <span class="btn-label">${t('layoutGrid')}</span>
+            </button>
+            <button data-layout="list" aria-pressed="${state.layout === 'list'}" data-i18n-title="layoutList" title="${esc(t('layoutList'))}">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01"/></svg>
+              <span class="btn-label">${t('layoutList')}</span>
+            </button>
+            <button data-layout="waterfall" aria-pressed="${state.layout === 'waterfall'}" data-i18n-title="layoutWaterfall" title="${esc(t('layoutWaterfall'))}">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><rect x="3.5" y="3.5" width="7" height="10" rx="1.5"/><rect x="13.5" y="3.5" width="7" height="6" rx="1.5"/><rect x="3.5" y="16.5" width="7" height="4" rx="1.5"/><rect x="13.5" y="12.5" width="7" height="8" rx="1.5"/></svg>
+              <span class="btn-label">${t('layoutWaterfall')}</span>
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <div class="browser-bar">
+        <span class="result-count">${state.query ? t('resultCount', { n: list.length }) : t('resultCountOf', { shown: list.length, total: state.objects.length })}</span>
+        <span class="index-note ${state.listComplete ? 'complete' : ''}">
+          <span class="dot"></span>
+          ${state.listComplete ? t('listComplete') : t('listIncomplete')}
+        </span>
+        <span class="spacer"></span>
+        <select class="select-field" id="sort-select" aria-label="${esc(t('sortBy'))}">
           <option value="dateDesc">${t('sortNewest')}</option>
           <option value="dateAsc">${t('sortOldest')}</option>
           <option value="nameAsc">${t('sortNameAsc')}</option>
@@ -520,24 +538,16 @@ function renderBrowser(main) {
           <option value="sizeAsc">${t('sortSizeAsc')}</option>
         </select>
       </div>
-    </div>
 
-    <div class="results-meta">
-      <span>${state.query ? t('resultCount', { n: list.length }) : t('resultCountOf', { shown: list.length, total: state.objects.length })}</span>
-      <span class="spacer"></span>
-      <span class="index-note ${state.listComplete ? 'complete' : ''}">
-        <span class="dot"></span>
-        ${state.listComplete ? t('listComplete') : t('listIncomplete')}
-      </span>
-    </div>
-    ${clientFiltered ? `<div class="results-meta"><span>${t('listFilteredClient', { n: state.objects.length })}</span></div>` : ''}
+      ${clientFiltered ? `<p class="filter-note">${t('listFilteredClient', { n: state.objects.length })}</p>` : ''}
 
-    <div id="browser" tabindex="-1"></div>
+      <div class="browser-region" id="browser" tabindex="-1"></div>
 
-    <div style="display:flex;justify-content:center;margin-top:var(--space-6)">
-      ${!state.listComplete ? `<button class="btn btn-outlined" id="load-more" ${state.loading ? 'disabled' : ''}>
-        ${state.loading ? `<span class="spinner"></span> ${t('loadingMore')}` : t('loadMore')}
-      </button>` : (list.length ? '' : '')}
+      <div class="load-more-row">
+        ${!state.listComplete ? `<button class="btn btn-outlined" id="load-more" ${state.loading ? 'disabled' : ''}>
+          ${state.loading ? `<span class="spinner"></span> ${t('loadingMore')}` : t('loadMore')}
+        </button>` : ''}
+      </div>
     </div>
   `;
 
@@ -552,8 +562,9 @@ function renderBrowser(main) {
     browser.innerHTML = renderGrid(list);
   }
 
-  main.querySelector('#sort-select').value = state.sort;
-  main.querySelector('#sort-select').addEventListener('change', (e) => { state.sort = e.target.value; savePrefs({ sort: state.sort }); render(); });
+  const sortSelect = main.querySelector('#sort-select');
+  sortSelect.value = state.sort;
+  sortSelect.addEventListener('change', (e) => { state.sort = e.target.value; savePrefs({ sort: state.sort }); render(); });
   main.querySelectorAll('[data-layout]').forEach(b => b.addEventListener('click', () => { state.layout = b.dataset.layout; savePrefs({ layout: state.layout }); render(); }));
   main.querySelector('#load-more')?.addEventListener('click', () => loadPage(false));
   main.querySelector('#empty-retry')?.addEventListener('click', () => loadPage(true));
@@ -570,19 +581,34 @@ function viewTitle() {
 }
 function viewSubtitle(c) {
   if (state.view === 'recent') return t('recentObjectsHint');
-  if (state.view === 'whitelist') return `${c.white} · ${t('listFilteredClient', { n: c.total }).replace(/^[a-z]/, '')}`;
-  return '';
+  if (state.view === 'images') return t('subtitleImages', { n: c.images });
+  if (state.view === 'whitelist') return t('subtitleWhitelist', { n: c.white });
+  if (state.view === 'blacklist') return t('subtitleBlacklist', { n: c.block });
+  return t('subtitleAllFiles');
 }
 
 function thumb(o) {
   if (o._kind === 'image') return `<img src="/file/${esc(o.name)}" alt="" loading="lazy">`;
-  if (o._kind === 'video') return `${iconFor('video')}<span class="video-badge">▶</span>`;
+  if (o._kind === 'video') return `${iconFor('video')}<span class="video-badge">${esc(kindLabel('video'))}</span>`;
   return iconFor(o._kind);
+}
+
+function selectControl(o, extraClass) {
+  return `<label class="card-select ${extraClass || ''}">
+    <input type="checkbox" data-select="${esc(o.name)}" ${state.selected.has(o.name) ? 'checked' : ''} aria-label="${esc(t('selectObject', { name: o.metadata?.fileName || o.name }))}">
+  </label>`;
+}
+
+function menuButton(o) {
+  return `<button class="icon-btn" data-menu="${esc(o.name)}" aria-label="${esc(t('objectActions', { name: o.metadata?.fileName || o.name }))}" title="${esc(t('objectActions', { name: o.metadata?.fileName || o.name }))}">
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true"><circle cx="6" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="18" cy="12" r="1.6"/></svg>
+  </button>`;
 }
 
 function renderGrid(list) {
   return `<div class="obj-grid">${list.map(cardHtml).join('')}</div>`;
 }
+
 function renderWaterfall(list) {
   const items = list.map(o => {
     const isMedia = o._kind === 'image' || o._kind === 'video';
@@ -590,38 +616,47 @@ function renderWaterfall(list) {
       ? (o._kind === 'video'
           ? `<video src="/file/${esc(o.name)}" preload="metadata" muted></video>`
           : `<img src="/file/${esc(o.name)}" alt="" loading="lazy">`)
-      : `<div style="aspect-ratio:1/1;display:grid;place-items:center;background:var(--md-sys-color-surface-container-high)">${iconFor(o._kind)}</div>`;
+      : `<div class="wf-placeholder">${iconFor(o._kind)}</div>`;
+    const label = esc(o.metadata?.fileName || o.name);
     return `<div class="wf-item ${state.selected.has(o.name) ? 'selected' : ''}" data-id="${esc(o.name)}">
       <span class="wf-moderation">${moderationChip(o)}</span>
-      <label class="wf-select card-select"><input type="checkbox" data-select="${esc(o.name)}" ${state.selected.has(o.name) ? 'checked' : ''} aria-label="${esc(t('selectObject', { name: o.name }))}"></label>
-      ${media}
-      <div class="wf-overlay"><span>${esc(o.metadata?.fileName || o.name)}</span></div>
+      ${selectControl(o, 'wf-select')}
+      <div class="wf-media" data-open="${esc(o.name)}" role="button" tabindex="0" aria-label="${esc(t('openDetails', { name: o.metadata?.fileName || o.name }))}">${media}</div>
+      <div class="wf-caption">
+        <span class="wf-text">
+          <span class="obj-name" title="${label}">${label}</span>
+          <span class="obj-sub">${esc(kindLabel(o._kind))} · ${esc(formatBytes(o.metadata?.fileSize))}</span>
+        </span>
+        <span class="card-menu">${menuButton(o)}</span>
+      </div>
     </div>`;
   }).join('');
   return `<div class="obj-waterfall">${items}</div>`;
 }
+
 function renderList(list) {
-  const rows = list.map(o => `
+  const rows = list.map(o => {
+    const label = esc(o.metadata?.fileName || o.name);
+    return `
     <div class="obj-row ${state.selected.has(o.name) ? 'selected' : ''}" data-id="${esc(o.name)}">
-      <label><input type="checkbox" data-select="${esc(o.name)}" ${state.selected.has(o.name) ? 'checked' : ''} aria-label="${esc(t('selectObject', { name: o.name }))}"></label>
-      <span class="cell-thumb">${o._kind === 'image' ? `<img src="/file/${esc(o.name)}" alt="" loading="lazy">` : iconFor(o._kind)}</span>
+      <label><input type="checkbox" data-select="${esc(o.name)}" ${state.selected.has(o.name) ? 'checked' : ''} aria-label="${esc(t('selectObject', { name: o.metadata?.fileName || o.name }))}"></label>
+      <span class="cell-thumb" data-open="${esc(o.name)}" role="button" tabindex="0" aria-label="${esc(t('openDetails', { name: o.metadata?.fileName || o.name }))}">${o._kind === 'image' ? `<img src="/file/${esc(o.name)}" alt="" loading="lazy">` : iconFor(o._kind)}</span>
       <span class="cell-name">
-        <span class="name">${esc(o.metadata?.fileName || o.name)}</span>
-        <span class="sub">${esc(extOf(o.name).toUpperCase())} · ${esc(fullDate(o.metadata?.TimeStamp))}</span>
+        <span class="name" title="${label}">${label}</span>
+        <span class="sub">${esc(extOf(o.name).toUpperCase() || '—')} · ${esc(fullDate(o.metadata?.TimeStamp))}</span>
       </span>
       <span class="cell-hide-sm cell-mono">${esc(formatBytes(o.metadata?.fileSize))}</span>
-      <span class="cell-hide-sm">${esc(kindLabel(o._kind))}</span>
-      <span class="cell-hide-sm">${moderationChip(o)}</span>
-      <button class="icon-btn" data-menu="${esc(o.name)}" data-i18n-aria="objectActions" aria-label="${esc(t('objectActions', { name: o.name }))}">
-        <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><circle cx="6" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="18" cy="12" r="1.6"/></svg>
-      </button>
-    </div>`).join('');
+      <span class="cell-hide-sm cell-type">${esc(kindLabel(o._kind))}</span>
+      <span class="cell-hide-sm cell-status">${moderationChip(o)}</span>
+      <span class="cell-actions">${menuButton(o)}</span>
+    </div>`;
+  }).join('');
   return `<div class="obj-list">
     <div class="obj-row head">
       <span></span><span></span>
       <span>${t('colName')}</span>
       <span class="cell-hide-sm">${t('colSize')}</span>
-      <span class="cell-hide-sm">${t('colType')}</span>
+      <span class="cell-hide-sm cell-type">${t('colType')}</span>
       <span class="cell-hide-sm">${t('colStatus')}</span>
       <span></span>
     </div>
@@ -630,18 +665,17 @@ function renderList(list) {
 }
 
 function cardHtml(o) {
+  const label = esc(o.metadata?.fileName || o.name);
   return `<article class="obj-card ${state.selected.has(o.name) ? 'selected' : ''}" data-id="${esc(o.name)}">
     <span class="obj-moderation">${moderationChip(o)}</span>
-    <label class="card-select"><input type="checkbox" data-select="${esc(o.name)}" ${state.selected.has(o.name) ? 'checked' : ''} aria-label="${esc(t('selectObject', { name: o.name }))}"></label>
-    <div class="obj-thumb" data-open="${esc(o.name)}" role="button" tabindex="0" aria-label="${esc(t('openDetails', { name: o.name }))}">${thumb(o)}</div>
+    ${selectControl(o)}
+    <div class="obj-thumb" data-open="${esc(o.name)}" role="button" tabindex="0" aria-label="${esc(t('openDetails', { name: o.metadata?.fileName || o.name }))}">${thumb(o)}</div>
     <div class="obj-meta">
-      <div class="obj-name" title="${esc(o.metadata?.fileName || o.name)}">${esc(o.metadata?.fileName || o.name)}</div>
-      <div class="obj-sub"><span>${esc(kindLabel(o._kind))}</span><span>·</span><span>${esc(formatBytes(o.metadata?.fileSize))}</span></div>
-    </div>
-    <div class="card-menu">
-      <button class="icon-btn" data-menu="${esc(o.name)}" data-i18n-aria="objectActions" aria-label="${esc(t('objectActions', { name: o.name }))}">
-        <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><circle cx="6" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="18" cy="12" r="1.6"/></svg>
-      </button>
+      <span class="obj-meta-text">
+        <span class="obj-name" title="${label}">${label}</span>
+        <span class="obj-sub">${esc(kindLabel(o._kind))} · ${esc(formatBytes(o.metadata?.fileSize))}</span>
+      </span>
+      <span class="card-menu">${menuButton(o)}</span>
     </div>
   </article>`;
 }
@@ -661,9 +695,11 @@ function bindObjectCards(scope) {
   scope.querySelectorAll('[data-menu]').forEach(btn => {
     btn.addEventListener('click', (e) => { e.stopPropagation(); openObjectMenu(btn, btn.dataset.menu); });
   });
+  // Waterfall tiles open details when the caption area (not a control) is
+  // clicked; the media itself is already handled by the [data-open] binding.
   scope.querySelectorAll('.wf-item').forEach(el => {
     el.addEventListener('click', (e) => {
-      if (e.target.closest('input,button,a')) return;
+      if (e.target.closest('input,button,a,label,[data-open]')) return;
       openDetail(el.dataset.id);
     });
   });
@@ -744,14 +780,23 @@ function openObjectMenu(anchor, id) {
   menu.innerHTML = items.map((it, i) => it.sep ? '<hr>' :
     `<button data-i="${i}" class="${it.danger ? 'danger' : ''}">${it.icon || ''}<span>${esc(it.label)}</span></button>`).join('');
   document.body.appendChild(menu);
-  const rect = anchor.getBoundingClientRect();
-  const mw = 220;
-  let left = Math.min(rect.left, window.innerWidth - mw - 8);
-  let top = rect.bottom + 4;
-  if (top + 300 > window.innerHeight) top = Math.max(8, rect.top - 300);
-  menu.style.left = Math.max(8, left) + 'px';
-  menu.style.top = top + 'px';
+  // Position against the real measured size so the menu always stays inside
+  // the viewport instead of relying on a guessed height.
+  const gap = 8;
+  const mw = Math.min(240, window.innerWidth - gap * 2);
   menu.style.minWidth = mw + 'px';
+  const rect = anchor.getBoundingClientRect();
+  const mh = menu.offsetHeight;
+  let left = Math.min(rect.right - mw, window.innerWidth - mw - gap);
+  left = Math.max(gap, left);
+  let top = rect.bottom + 4;
+  if (top + mh + gap > window.innerHeight) {
+    // Flip above the anchor, then clamp so it never leaves the viewport.
+    top = rect.top - mh - 4;
+    if (top < gap) top = Math.max(gap, window.innerHeight - mh - gap);
+  }
+  menu.style.left = left + 'px';
+  menu.style.top = top + 'px';
   activeMenu = menu;
   setTimeout(() => document.addEventListener('click', closeMenu, true), 0);
   menu.addEventListener('click', (e) => {
@@ -766,8 +811,11 @@ function openObjectMenu(anchor, id) {
 
 /* --------------------------- detail sheet ------------------------ */
 function openDetail(id) {
-  const obj = state.objects.find(o => o.name === id);
-  if (!obj) return;
+  // The whole sheet body refers to `o`; bind it here so the template can be
+  // evaluated (previously this was declared as `obj`, which threw a
+  // ReferenceError and rendered the sheet empty).
+  const o = state.objects.find(item => item.name === id);
+  if (!o) return;
   state.detailId = id;
   const sheet = $('detail-sheet');
   const body = $('detail-body');
@@ -786,39 +834,53 @@ function openDetail(id) {
 
   body.innerHTML = `
     <div class="detail-preview">${preview}</div>
-    <div class="detail-actions-row">
-      <button class="btn btn-filled btn-sm" id="d-copy-url">${t('copyUrl')}</button>
-      <button class="btn btn-outlined btn-sm" id="d-copy-md">MD</button>
-      <button class="btn btn-outlined btn-sm" id="d-copy-bb">BBCode</button>
-      <button class="btn btn-outlined btn-sm" id="d-copy-html">HTML</button>
-      <button class="btn btn-tonal btn-sm" id="d-download">${t('download')}</button>
-    </div>
-    <dl class="detail-dl">
-      <dt>${t('metaFilename')}</dt><dd>${esc(o.metadata?.fileName || o.name)}</dd>
-      <dt>${t('metaId')}</dt><dd class="mono">${esc(o.name)}</dd>
-      <dt>${t('metaType')}</dt><dd>${esc(kindLabel(o._kind))} · ${esc(extOf(o.name).toUpperCase() || '—')}</dd>
-      <dt>${t('metaSize')}</dt><dd>${esc(formatBytes(o.metadata?.fileSize))}</dd>
-      <dt>${t('metaAdded')}</dt><dd>${esc(fullDate(o.metadata?.TimeStamp))}</dd>
-      <dt>${t('metaModeration')}</dt><dd>${moderationChip(o) || t('moderationNone')}</dd>
-      ${o.metadata?.provider ? `<dt>${t('metaProvider')}</dt><dd>${esc(o.metadata.provider)}</dd>` : ''}
-      <dt>${t('metaPublicUrl')}</dt>
-      <dd>
-        <div class="url-row">
-          <input readonly value="${esc(publicUrl(o))}" id="d-url-input">
-          <button class="btn btn-tonal btn-sm" id="d-copy-2">${t('copyUrl')}</button>
-        </div>
-      </dd>
-      <dt>${t('metaRawMetadata')}</dt><dd class="mono">${esc(JSON.stringify(o.metadata, null, 2))}</dd>
-    </dl>
+
+    <section class="detail-section">
+      <h3 class="detail-section-title">${t('detailShare')}</h3>
+      <div class="detail-actions-row">
+        <button class="btn btn-filled btn-sm" id="d-copy-url">${t('copyUrl')}</button>
+        <button class="btn btn-outlined btn-sm" id="d-copy-md">${t('copyMarkdown')}</button>
+        <button class="btn btn-outlined btn-sm" id="d-copy-bb">${t('copyBbcode')}</button>
+        <button class="btn btn-outlined btn-sm" id="d-copy-html">${t('copyHtml')}</button>
+        <button class="btn btn-tonal btn-sm" id="d-download">${t('download')}</button>
+      </div>
+      <div class="url-row">
+        <input readonly value="${esc(publicUrl(o))}" id="d-url-input" aria-label="${esc(t('metaPublicUrl'))}">
+        <button class="btn btn-tonal btn-sm" id="d-copy-2">${t('copyUrl')}</button>
+      </div>
+    </section>
+
+    <section class="detail-section">
+      <h3 class="detail-section-title">${t('detailProperties')}</h3>
+      <dl class="detail-dl">
+        <dt>${t('metaFilename')}</dt><dd>${esc(o.metadata?.fileName || o.name)}</dd>
+        <dt>${t('metaId')}</dt><dd class="mono">${esc(o.name)}</dd>
+        <dt>${t('metaType')}</dt><dd>${esc(kindLabel(o._kind))} · ${esc(extOf(o.name).toUpperCase() || '—')}</dd>
+        <dt>${t('metaSize')}</dt><dd>${esc(formatBytes(o.metadata?.fileSize))}</dd>
+        <dt>${t('metaAdded')}</dt><dd>${esc(fullDate(o.metadata?.TimeStamp))}</dd>
+        <dt>${t('metaModeration')}</dt><dd>${moderationChip(o) || esc(t('moderationNone'))}</dd>
+        ${o.metadata?.provider ? `<dt>${t('metaProvider')}</dt><dd>${esc(o.metadata.provider)}</dd>` : ''}
+      </dl>
+    </section>
+
+    <section class="detail-section">
+      <h3 class="detail-section-title">${t('metaRawMetadata')}</h3>
+      <pre class="detail-raw">${esc(JSON.stringify(o.metadata, null, 2))}</pre>
+    </section>
   `;
   const likeLabel = o.metadata?.liked ? t('toggleLike') : t('liked');
+  // Two explicit groups instead of a flex spacer: edit actions and moderation
+  // actions each stay together when the row wraps.
   acts.innerHTML = `
-    <button class="btn btn-tonal" id="d-rename">${t('rename')}</button>
-    <button class="btn btn-tonal" id="d-like">${likeLabel}</button>
-    <span style="flex:1"></span>
-    <button class="btn btn-outlined" id="d-white">${t('whitelist')}</button>
-    <button class="btn btn-outlined" id="d-block">${t('blacklist')}</button>
-    <button class="btn btn-danger-tonal" id="d-delete">${t('deleteObject')}</button>
+    <div class="sheet-action-group">
+      <button class="btn btn-tonal btn-sm" id="d-rename">${t('rename')}</button>
+      <button class="btn btn-tonal btn-sm" id="d-like">${likeLabel}</button>
+    </div>
+    <div class="sheet-action-group">
+      <button class="btn btn-outlined btn-sm" id="d-white">${t('whitelist')}</button>
+      <button class="btn btn-outlined btn-sm" id="d-block">${t('blacklist')}</button>
+      <button class="btn btn-danger-tonal btn-sm" id="d-delete">${t('deleteObject')}</button>
+    </div>
   `;
   body.querySelector('#d-copy-url').onclick = () => copyText(publicUrl(o));
   body.querySelector('#d-copy-md').onclick = () => copyText(linkFor(o, 'markdown'));
@@ -926,6 +988,15 @@ async function renameObject(obj, newName) {
     snackbar(t('actionFailed'), { isError: true });
     return false;
   }
+}
+
+// Bulk delete is wired to the selection bar and the command palette, but the
+// function was missing, which threw a ReferenceError while building the
+// palette command list and left the palette empty.
+function bulkDelete() {
+  const objs = selectedObjects();
+  if (!objs.length) return;
+  return confirmDelete(objs);
 }
 
 async function deleteObjects(objs) {
@@ -1101,7 +1172,10 @@ function setView(v) {
 }
 function focusSearch() {
   const s = $('search');
-  if (s) { s.focus(); if (window.innerWidth <= 768) setView('all'); }
+  if (!s) return;
+  closeMobileNav();
+  s.focus();
+  s.select?.();
 }
 
 function toggleTheme() {
@@ -1112,15 +1186,50 @@ function toggleTheme() {
 function cycleLanguage() {
   setLanguage(getLanguage() === 'en' ? 'id' : 'en');
 }
+function applyLanguageBadge() {
+  const code = $('lang-code');
+  if (code) code.textContent = getLanguage().toUpperCase();
+}
 
-/* --------------------------- mobile nav -------------------------- */
-function toggleMobileNav() { $('side-nav').classList.toggle('open'); }
-function closeMobileNav() { $('side-nav').classList.remove('open'); }
+/* --------------------------- mobile nav --------------------------
+ * The drawer uses its own scrim element so it participates in the shared
+ * layering scale (below sheets/dialogs) instead of reusing the sheet
+ * backdrop, which would let a sheet and the drawer fight over one scrim.
+ */
+function navScrim() {
+  let el = document.querySelector('.nav-scrim');
+  if (!el) {
+    el = document.createElement('div');
+    el.className = 'nav-scrim';
+    el.addEventListener('click', closeMobileNav);
+    document.body.appendChild(el);
+  }
+  return el;
+}
+function isMobileNav() { return window.matchMedia('(max-width: 1023.98px)').matches; }
+function openMobileNav() {
+  $('side-nav').classList.add('open');
+  navScrim().classList.add('open');
+  $('nav-toggle')?.setAttribute('aria-expanded', 'true');
+  $('nav-close')?.focus();
+}
+function closeMobileNav() {
+  const nav = $('side-nav');
+  if (!nav.classList.contains('open')) return;
+  nav.classList.remove('open');
+  navScrim().classList.remove('open');
+  $('nav-toggle')?.setAttribute('aria-expanded', 'false');
+}
+function toggleMobileNav() {
+  if ($('side-nav').classList.contains('open')) closeMobileNav();
+  else openMobileNav();
+}
 
 /* ----------------------------- init ------------------------------ */
 function bindEvents() {
   document.querySelectorAll('.nav-item').forEach(b => b.addEventListener('click', () => setView(b.dataset.view)));
   $('nav-toggle')?.addEventListener('click', toggleMobileNav);
+  $('nav-close')?.addEventListener('click', () => { closeMobileNav(); $('nav-toggle')?.focus(); });
   $('refresh-btn').addEventListener('click', () => loadPage(true));
   $('theme-btn').addEventListener('click', toggleTheme);
   $('lang-btn').addEventListener('click', cycleLanguage);
@@ -1138,7 +1247,12 @@ function bindEvents() {
   });
   $('search-clear').addEventListener('click', () => { search.value = ''; state.query = ''; search.focus(); render(); });
 
-  $('backdrop').addEventListener('click', () => { closeDetail(); closeMobileNav(); });
+  $('backdrop').addEventListener('click', () => closeDetail());
+
+  // Keep the drawer state consistent when crossing the desktop breakpoint.
+  window.matchMedia('(max-width: 1023.98px)').addEventListener?.('change', (e) => {
+    if (!e.matches) closeMobileNav();
+  });
 
   // palette
   const pinput = $('palette-input');
@@ -1157,6 +1271,7 @@ function bindEvents() {
     if (e.key === 'Escape') {
       if (!$('palette').hidden) return closePalette();
       if (!$('detail-sheet').hidden) return closeDetail();
+      if ($('side-nav').classList.contains('open')) { closeMobileNav(); $('nav-toggle')?.focus(); return; }
       closeDialogViaEscape();
       closeMenu();
       return;
@@ -1169,6 +1284,7 @@ function bindEvents() {
 
   onLanguageChange(() => {
     document.documentElement.lang = getLanguage();
+    applyLanguageBadge();
     render();
   });
 }
