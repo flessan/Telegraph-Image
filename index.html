@@ -154,6 +154,30 @@
         </div>
 
         <div id="offline-banner" class="offline-banner" hidden role="status"></div>
+
+        <section id="push-panel" class="push-panel" hidden aria-labelledby="push-phase">
+          <div class="push-head">
+            <div class="push-head-text">
+              <h2 id="push-phase">Uploading</h2>
+              <p id="push-progress-text"></p>
+            </div>
+            <div class="push-controls">
+              <button type="button" class="btn text" id="push-pause">Pause</button>
+              <button type="button" class="btn text" id="push-cancel" data-i18n="queueCancel">Cancel</button>
+              <button type="button" class="btn text" id="push-retry-failed" hidden>Retry failed</button>
+              <button type="button" class="btn text" id="push-dismiss" hidden data-i18n="queueDone">Done</button>
+            </div>
+          </div>
+          <div class="push-bar" id="push-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100"><i id="push-bar-fill"></i></div>
+          <div class="push-current" id="push-current" hidden>
+            <div class="push-current-row">
+              <span class="push-current-name" id="push-current-name"></span>
+              <span class="push-current-state" id="push-current-state"></span>
+            </div>
+            <div class="push-bar sm"><i id="push-current-fill"></i></div>
+          </div>
+          <p class="push-note" id="push-note" role="status"></p>
+        </section>
         <div id="setup-notice" class="setup-stack" role="status" aria-live="polite"></div>
         <div id="bulk-bar" class="bulk-bar" hidden>
           <span id="bulk-count"></span>

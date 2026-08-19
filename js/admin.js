@@ -7,6 +7,9 @@ import {
   normalizeAlbum, objectsIn, pathLabel, pathOf, resolveAlbumId, subtreeIds,
   validateName,
 } from './albums.js';
+import {
+  categorize, categoryLabelKey, formatOutput, previewKind,
+} from './mime.js';
 
 /* ------------------------------------------------------------------ *
  * Remote Storage Console
@@ -76,15 +79,32 @@ function extOf(name) {
   const i = (name || '').lastIndexOf('.');
   return i >= 0 ? name.slice(i + 1).toLowerCase() : '';
 }
-function kindOf(name) {
-  const e = extOf(name);
-  if (IMAGE_EXTS.includes(e)) return 'image';
-  if (VIDEO_EXTS.includes(e)) return 'video';
-  if (AUDIO_EXTS.includes(e)) return 'audio';
-  return 'document';
+/**
+ * Semantic category of a remote object.
+ *
+ * The KV metadata written by the existing upload endpoint has no MIME field,
+ * so remotely the filename is usually the only signal there is — exactly the
+ * case the shared helper treats as "fall back to the extension". When a stored
+ * MIME type is present (mimetype/contentType/type on the metadata) it wins.
+ */
+function storedMime(metadata) {
+  const meta = metadata || {};
+  return meta.mimeType || meta.mimetype || meta.contentType || meta.type || '';
+}
+function categoryOf(name, metadata) {
+  return categorize({ mime: storedMime(metadata), name });
+}
+/** Legacy coarse kind used by icons/filters: image | video | audio | document. */
+function kindOf(name, metadata) {
+  const category = categoryOf(name, metadata);
+  return category === 'image' || category === 'video' || category === 'audio' ? category : 'document';
 }
 function kindLabel(kind) {
   return t({ image: 'typeImage', video: 'typeVideo', audio: 'typeAudio', document: 'typeDocument' }[kind] || 'typeFile');
+}
+/** Precise, translated label for the object's real category. */
+function categoryLabel(o) {
+  return t(categoryLabelKey(o._category || categoryOf(o.name, o.metadata)));
 }
 function formatBytes(bytes) {
   const n = Number(bytes) || 0;
@@ -172,11 +192,15 @@ async function loadPage(reset = false) {
     const res = await api(`/api/manage/list?${params}`);
     if (!res.ok) throw new Error('http ' + res.status);
     const data = await res.json();
-    const incoming = (data.keys || []).map(k => ({
-      name: k.name,
-      metadata: normalizeMeta(k.metadata, k.name),
-      _kind: kindOf(k.name),
-    }));
+    const incoming = (data.keys || []).map(k => {
+      const metadata = normalizeMeta(k.metadata, k.name);
+      return {
+        name: k.name,
+        metadata,
+        _kind: kindOf(k.name, metadata),
+        _category: categoryOf(k.name, metadata),
+      };
+    });
     state.objects = reset ? incoming : mergeObjects(state.objects, incoming);
     state.cursor = data.list_complete ? undefined : data.cursor;
     state.listComplete = !!data.list_complete;
@@ -261,15 +285,17 @@ function legacyCopy(text) {
   try { ok = document.execCommand('copy'); } catch (_) { ok = false; }
   document.body.removeChild(ta); return ok;
 }
+/**
+ * Copy/paste snippet for a remote object, built from its real category so a
+ * PDF or an audio file never becomes image markup.
+ */
 function linkFor(obj, format) {
-  const url = publicUrl(obj);
-  const label = esc(obj.metadata?.fileName || obj.name);
-  switch (format) {
-    case 'markdown': return `![${obj.metadata?.fileName || obj.name}](${url})`;
-    case 'bbcode': return `[img]${url}[/img]`;
-    case 'html': return `<img src="${url}" alt="${label}">`;
-    default: return url;
-  }
+  return formatOutput({
+    url: publicUrl(obj),
+    name: obj.metadata?.fileName || obj.name,
+    mime: storedMime(obj.metadata),
+    category: obj._category || categoryOf(obj.name, obj.metadata),
+  }, format);
 }
 
 /* --------------------------- filtering --------------------------- */
@@ -662,7 +688,7 @@ function renderList(list) {
         <span class="sub">${esc(extOf(o.name).toUpperCase() || '—')} · ${esc(fullDate(o.metadata?.TimeStamp))}</span>
       </span>
       <span class="cell-hide-sm cell-mono">${esc(formatBytes(o.metadata?.fileSize))}</span>
-      <span class="cell-hide-sm cell-type">${esc(kindLabel(o._kind))}</span>
+      <span class="cell-hide-sm cell-type">${esc(categoryLabel(o))}</span>
       <span class="cell-hide-sm cell-status">${moderationChip(o)}</span>
       <span class="cell-actions">${menuButton(o)}</span>
     </div>`;
@@ -689,7 +715,7 @@ function cardHtml(o) {
     <div class="obj-meta">
       <span class="obj-meta-text">
         <span class="obj-name" title="${label}">${label}</span>
-        <span class="obj-sub">${esc(kindLabel(o._kind))} · ${esc(formatBytes(o.metadata?.fileSize))}</span>
+        <span class="obj-sub">${esc(categoryLabel(o))} · ${esc(formatBytes(o.metadata?.fileSize))}</span>
       </span>
       <span class="card-menu">${menuButton(o)}</span>
     </div>
@@ -829,6 +855,31 @@ function openObjectMenu(anchor, id) {
   });
 }
 
+/**
+ * Preview surface for the detail sheet, chosen from the object's category.
+ * Text and unknown binaries get an honest generic surface rather than a broken
+ * <img>.
+ */
+function detailPreviewHtml(o) {
+  const url = `/file/${esc(o.name)}`;
+  const label = esc(o.metadata?.fileName || o.name);
+  switch (previewKind(o._category || categoryOf(o.name, o.metadata))) {
+    case 'image':
+      return `<img src="${url}" alt="${label}" loading="lazy">`;
+    case 'video':
+      return `<video src="${url}" controls preload="metadata"></video>`;
+    case 'audio':
+      return `<audio src="${url}" controls preload="metadata" style="width:100%" aria-label="${esc(t('previewAudioAria', { name: o.metadata?.fileName || o.name }))}"></audio>`;
+    case 'pdf':
+      return `<div class="doc-preview">
+        <iframe src="${url}" title="${esc(t('previewPdfAria', { name: o.metadata?.fileName || o.name }))}" loading="lazy"></iframe>
+        <a href="${url}" target="_blank" rel="noopener">${esc(t('previewOpenExternally'))}</a>
+      </div>`;
+    default:
+      return `<div class="no-preview">${iconFor(o._kind)}<span>${esc(categoryLabel(o))} · ${esc(t('previewNoInline'))}</span></div>`;
+  }
+}
+
 /* --------------------------- detail sheet ------------------------ */
 function openDetail(id) {
   // The whole sheet body refers to `o`; bind it here so the template can be
@@ -844,13 +895,7 @@ function openDetail(id) {
   requestAnimationFrame(() => sheet.classList.add('open'));
   showBackdrop();
 
-  const preview = (o._kind === 'image')
-    ? `<img src="/file/${esc(o.name)}" alt="${esc(o.metadata?.fileName || o.name)}">`
-    : (o._kind === 'video')
-      ? `<video src="/file/${esc(o.name)}" controls></video>`
-      : (o._kind === 'audio')
-        ? `<audio src="/file/${esc(o.name)}" controls style="width:100%"></audio>`
-        : `<div class="no-preview">${iconFor(o._kind)}<span>${t('previewUnavailable')}</span></div>`;
+  const preview = detailPreviewHtml(o);
 
   body.innerHTML = `
     <div class="detail-preview">${preview}</div>
@@ -875,7 +920,7 @@ function openDetail(id) {
       <dl class="detail-dl">
         <dt>${t('metaFilename')}</dt><dd>${esc(o.metadata?.fileName || o.name)}</dd>
         <dt>${t('metaId')}</dt><dd class="mono">${esc(o.name)}</dd>
-        <dt>${t('metaType')}</dt><dd>${esc(kindLabel(o._kind))} · ${esc(extOf(o.name).toUpperCase() || '—')}</dd>
+        <dt>${t('metaType')}</dt><dd>${esc(categoryLabel(o))} · ${esc(extOf(o.name).toUpperCase() || '—')}</dd>
         <dt>${t('metaSize')}</dt><dd>${esc(formatBytes(o.metadata?.fileSize))}</dd>
         <dt>${t('metaAdded')}</dt><dd>${esc(fullDate(o.metadata?.TimeStamp))}</dd>
         <dt>${t('metaModeration')}</dt><dd>${moderationChip(o) || esc(t('moderationNone'))}</dd>

@@ -285,3 +285,116 @@ describe('console albums (DOM)', function () {
     assert.match(ctx.doc.querySelector('.filter-note').textContent, /objek yang sudah dimuat/i);
   });
 });
+
+/**
+ * The console must present remote objects as what they are. The upload
+ * endpoint stores no MIME field, so remotely the filename is the only signal
+ * available — which is exactly the documented extension fallback.
+ */
+describe('console MIME-aware output (DOM)', function () {
+  this.timeout(10000);
+
+  let ctx;
+  const objects = [
+    { name: 'r2-photo.png', metadata: { fileName: 'photo.png', fileSize: 10, TimeStamp: 1, ListType: 'None', Label: 'None', liked: false } },
+    { name: 'r2-song.mp3', metadata: { fileName: 'song.mp3', fileSize: 20, TimeStamp: 2, ListType: 'None', Label: 'None', liked: false } },
+    { name: 'r2-clip.mp4', metadata: { fileName: 'clip.mp4', fileSize: 30, TimeStamp: 3, ListType: 'None', Label: 'None', liked: false } },
+    { name: 'r2-manual.pdf', metadata: { fileName: 'manual.pdf', fileSize: 40, TimeStamp: 4, ListType: 'None', Label: 'None', liked: false } },
+    { name: 'r2-bundle.zip', metadata: { fileName: 'pack[v2].zip', fileSize: 50, TimeStamp: 5, ListType: 'None', Label: 'None', liked: false } },
+  ];
+
+  async function start(language = 'en') {
+    ctx = await boot({
+      page: 'admin.html',
+      module: 'js/admin.js',
+      language,
+      routes: {
+        '/api/manage/session': () => ({ body: { authenticated: true, authEnabled: true } }),
+        '/api/manage/albums': () => ({ body: { albums: [], list_complete: true } }),
+        '/api/manage/list': () => ({ body: { keys: objects, list_complete: true } }),
+      },
+    });
+    await tick(80);
+    click(ctx.doc.querySelector('.nav-item[data-view="all"]'));
+    await tick(40);
+    return ctx;
+  }
+
+  async function copyVia(name, label) {
+    const row = ctx.all('[data-menu]').find((b) => b.getAttribute('aria-label').includes(name));
+    click(row);
+    await tick(20);
+    const item = ctx.all('.menu button').find((b) => b.textContent.includes(label));
+    click(item);
+    await tick(30);
+    return ctx.copied();
+  }
+
+  afterEach(function () {
+    teardown();
+    ctx = null;
+  });
+
+  it('builds HTML snippets from the object category, not from "everything is an image"', async function () {
+    await start();
+    assert.match(await copyVia('photo.png', 'Copy HTML'), /^<img src="[^"]+\/file\/r2-photo\.png" alt="photo\.png" loading="lazy">$/);
+    assert.match(await copyVia('song.mp3', 'Copy HTML'), /^<audio controls preload="metadata" src="[^"]+">song\.mp3<\/audio>$/);
+    assert.match(await copyVia('clip.mp4', 'Copy HTML'), /^<video controls preload="metadata" src="[^"]+">clip\.mp4<\/video>$/);
+    assert.match(await copyVia('manual.pdf', 'Copy HTML'), /^<iframe src="[^"]+" title="manual\.pdf"/);
+    assert.match(await copyVia('pack[v2].zip', 'Copy HTML'), /^<a href="[^"]+" download>pack\[v2\]\.zip<\/a>$/);
+  });
+
+  it('never emits Markdown image syntax or [img] for a non-image', async function () {
+    await start();
+    assert.ok((await copyVia('photo.png', 'Copy Markdown')).startsWith('!['));
+    for (const name of ['song.mp3', 'clip.mp4', 'manual.pdf', 'pack[v2].zip']) {
+      const md = await copyVia(name, 'Copy Markdown');
+      assert.ok(!md.startsWith('!['), `${name} → ${md}`);
+      const bb = await copyVia(name, 'Copy BBCode');
+      assert.ok(!bb.includes('[img]'), `${name} → ${bb}`);
+      assert.ok(bb.startsWith('[url='), bb);
+    }
+    assert.ok((await copyVia('photo.png', 'Copy BBCode')).startsWith('[img]'));
+  });
+
+  it('escapes bracket characters in BBCode labels', async function () {
+    await start();
+    const bb = await copyVia('pack[v2].zip', 'Copy BBCode');
+    assert.ok(bb.includes('pack&#91;v2&#93;.zip'), bb);
+  });
+
+  it('keeps the direct URL action byte-identical to the public URL', async function () {
+    await start();
+    const url = await copyVia('song.mp3', 'Copy URL');
+    assert.strictEqual(url, 'http://localhost:8788/file/r2-song.mp3');
+  });
+
+  it('renders a matching preview surface in the detail sheet', async function () {
+    await start();
+    const open = async (name) => {
+      const target = ctx.all('[data-open]').find((el) => el.getAttribute('aria-label').includes(name));
+      click(target);
+      await tick(40);
+      return ctx.$('detail-body').querySelector('.detail-preview');
+    };
+    assert.ok((await open('photo.png')).querySelector('img'));
+    assert.ok((await open('song.mp3')).querySelector('audio[controls]'));
+    assert.ok((await open('clip.mp4')).querySelector('video[controls]'));
+    const pdf = await open('manual.pdf');
+    assert.ok(pdf.querySelector('iframe'), 'pdf → embedded viewer');
+    assert.strictEqual(pdf.querySelector('img'), null);
+    const zip = await open('pack[v2].zip');
+    assert.strictEqual(zip.querySelector('img'), null, 'an archive is never rendered as an image');
+    assert.match(zip.textContent, /Archive/);
+  });
+
+  it('labels categories precisely in both languages', async function () {
+    await start();
+    assert.match(ctx.$('main').textContent, /PDF document/);
+    assert.match(ctx.$('main').textContent, /Archive/);
+    teardown();
+    await start('id');
+    assert.match(ctx.$('main').textContent, /Dokumen PDF/);
+    assert.match(ctx.$('main').textContent, /Arsip/);
+  });
+});

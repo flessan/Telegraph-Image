@@ -63,7 +63,8 @@ async function tick(ms = 12) {
  * Boots a page with the given module and returns handles plus a fetch log.
  * `routes` maps a URL matcher to a handler returning `{ status, body }`.
  */
-async function boot({ page, module: modulePath, language = 'en', routes = {}, prefs = {} }) {
+async function boot(options = {}) {
+  const { page, module: modulePath, language = 'en', routes = {}, prefs = {} } = options;
   const html = fs.readFileSync(path.join(root, page), 'utf8');
   const dom = new JSDOM(html, { url: 'http://localhost:8788/', pretendToBeVisual: true });
   const win = dom.window;
@@ -72,6 +73,16 @@ async function boot({ page, module: modulePath, language = 'en', routes = {}, pr
   win.URL.createObjectURL = () => 'blob:mock';
   win.URL.revokeObjectURL = () => {};
   win.scrollTo = () => {};
+  // Both surfaces fall back to execCommand('copy') when the async clipboard is
+  // unavailable (it is, under jsdom). Capture what would have been copied.
+  win.__copied = null;
+  win.document.execCommand = (command) => {
+    if (command !== 'copy') return false;
+    const areas = win.document.querySelectorAll('textarea');
+    const last = areas[areas.length - 1];
+    win.__copied = last ? last.value : null;
+    return true;
+  };
   stubImage(win);
   win.localStorage.setItem('ti.lang', language);
   if (Object.keys(prefs).length) win.localStorage.setItem('ti.prefs', JSON.stringify(prefs));
@@ -94,17 +105,50 @@ async function boot({ page, module: modulePath, language = 'en', routes = {}, pr
   };
 
   // XHR is only used by the workspace push; capture it instead of networking.
+  // `xhrScript(call)` may return { status, body, headers, delayMs, networkError,
+  // bytes } to script transient failures, rate limits and slow uploads.
+  const script = typeof options.xhrScript === 'function' ? options.xhrScript : null;
   class MockXHR {
-    constructor() { this.upload = {}; this.status = 200; }
+    constructor() { this.upload = {}; this.status = 200; this._headers = {}; }
     open(method, url) { this.method = method; this.url = url; }
+    getResponseHeader(name) {
+      const key = String(name).toLowerCase();
+      const found = Object.keys(this._headers).find((k) => k.toLowerCase() === key);
+      return found ? String(this._headers[found]) : null;
+    }
     send(body) {
-      uploads.push({ url: this.url, body });
+      const index = uploads.length;
+      const file = body && typeof body.get === 'function' ? body.get('file') : null;
+      const call = {
+        url: this.url,
+        body,
+        index,
+        name: (file && file.name) || null,
+        size: (file && file.size) || 0,
+        at: Date.now(),
+      };
+      uploads.push(call);
+      const plan = (script && script(call)) || {};
+      const delay = plan.delayMs == null ? 0 : plan.delayMs;
       setTimeout(() => {
-        const id = 'r2-' + (++counter) + '.png';
-        this.responseText = JSON.stringify([{ src: '/file/' + id }]);
-        this.status = 200;
+        if (plan.networkError) {
+          this.status = 0;
+          this.onerror && this.onerror();
+          return;
+        }
+        if (this.upload.onprogress) {
+          const total = call.size || 1;
+          this.upload.onprogress({ lengthComputable: true, loaded: total, total });
+        }
+        const id = plan.id || ('r2-' + (++counter) + '.png');
+        this._headers = plan.headers || {};
+        this.status = plan.status == null ? 200 : plan.status;
+        this.responseText = plan.body != null
+          ? (typeof plan.body === 'string' ? plan.body : JSON.stringify(plan.body))
+          : JSON.stringify([{ src: '/file/' + id }]);
+        call.finishedAt = Date.now();
         this.onload && this.onload();
-      }, 0);
+      }, delay);
     }
   }
   win.XMLHttpRequest = MockXHR;
@@ -149,6 +193,7 @@ async function boot({ page, module: modulePath, language = 'en', routes = {}, pr
   return {
     win, doc: win.document, $, all, text, calls, uploads, errors,
     file: (name, type, content) => makeFile(win, name, type, content),
+    copied: () => win.__copied,
     dataTransfer,
     fire, click, tick,
   };

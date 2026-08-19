@@ -18,13 +18,41 @@ import {
   subtreeIds,
   validateName,
 } from './albums.js';
+import {
+  CATEGORY,
+  canPreviewLocally,
+  categorize,
+  categoryLabelKey,
+  formatOutput,
+  previewKind,
+} from './mime.js';
+import {
+  classifyFailure,
+  createPushQueue,
+  parseRetryAfter,
+  roundEtaMs,
+} from './push-queue.js';
 
 const PREFS_KEY = 'ti.prefs';
 const DB_NAME = 'ti-workspace';
 const DB_STORE = 'items';
 const DB_ALBUMS = 'albums';
 const DB_VERSION = 2;
-const MAX_CONCURRENT = 3;
+// Push spacing: one file at a time, with a short jittered gap between files so
+// a large batch does not turn into a burst. The two intervals are advanced
+// preferences (persisted with the other workspace prefs) rather than constants,
+// so a slow or strict host can be given more room without touching the code.
+const PUSH_DELAY_DEFAULT_MS = 1200;
+const PUSH_RETRY_BASE_DEFAULT_MS = 2000;
+const PUSH_JITTER = 0.25;
+const PUSH_MAX_RETRIES = 3;
+
+function prefInterval(key, fallback, max) {
+  const value = Number(loadPrefs()[key]);
+  return Number.isFinite(value) && value >= 0 && value <= max ? value : fallback;
+}
+const pushDelayMs = () => prefInterval('pushDelayMs', PUSH_DELAY_DEFAULT_MS, 60000);
+const pushRetryBaseMs = () => prefInterval('pushRetryBaseMs', PUSH_RETRY_BASE_DEFAULT_MS, 60000);
 const RECENT_MS = 48 * 60 * 60 * 1000;
 
 const state = {
@@ -46,6 +74,7 @@ const state = {
   online: typeof navigator === 'undefined' ? true : navigator.onLine !== false,
   previewId: null,
   previewZoom: false,
+  queue: null,            // last snapshot from the sequential push queue
   objectUrls: new Map(),
 };
 
@@ -57,6 +86,10 @@ let lastFocus = null;
 let dragState = null;      // { kind: 'objects' | 'album', ids | albumId }
 let moveContext = null;    // state of the "Move to…" dialog
 let albumDialogContext = null;
+let pushQueue = null;      // sequential upload queue (js/push-queue.js)
+let queueTicker = null;    // countdown/ETA ticker while a push is running
+let activeUpload = null;   // in-flight XHR, kept so state stays inspectable
+let stageSeq = 0;          // monotonic staging order, independent of the clock
 
 const $ = (id) => document.getElementById(id);
 
@@ -70,6 +103,7 @@ function loadPrefs() {
 
 function savePrefs() {
   try {
+    const prefs = loadPrefs();
     localStorage.setItem(PREFS_KEY, JSON.stringify({
       theme: state.theme,
       layout: state.layout,
@@ -77,6 +111,9 @@ function savePrefs() {
       view: state.view,
       albumId: state.albumId,
       expanded: Array.from(state.expanded),
+      // Advanced, optional: preserved verbatim when present.
+      ...(prefs.pushDelayMs !== undefined ? { pushDelayMs: prefs.pushDelayMs } : {}),
+      ...(prefs.pushRetryBaseMs !== undefined ? { pushRetryBaseMs: prefs.pushRetryBaseMs } : {}),
     }));
   } catch (_) { /* ignore */ }
 }
@@ -201,6 +238,7 @@ function toRecord(item) {
     type: item.type,
     size: item.size,
     addedAt: item.addedAt,
+    seq: item.seq,
     pushedAt: item.pushedAt,
     status: item.status === 'pushing' ? 'pending' : item.status,
     src: item.src,
@@ -230,15 +268,26 @@ function rememberUrl(id, blob) {
 
 function localPreview(item) {
   if (item.previewUrl) return item.previewUrl;
-  if (item.file && isImage(item)) {
+  // Object URLs are only worth creating for things the browser can render.
+  if (item.file && canPreviewLocally(itemCategory(item))) {
     item.previewUrl = rememberUrl(item.id, item.file);
     return item.previewUrl;
   }
   return item.url || '';
 }
 
+/**
+ * Semantic category of a staged/synced object. `File.type` is authoritative
+ * locally; the filename is only consulted when no MIME type was reported.
+ */
+function itemCategory(item) {
+  if (!item) return CATEGORY.FILE;
+  if (!item._category) item._category = categorize({ mime: item.type, name: item.name });
+  return item._category;
+}
+
 function isImage(item) {
-  return (item.type || '').indexOf('image/') === 0;
+  return itemCategory(item) === CATEGORY.IMAGE;
 }
 
 function extOf(name) {
@@ -274,6 +323,20 @@ function statusLabel(status) {
   if (status === 'synced') return t('statusSynced');
   if (status === 'failed') return t('statusFailed');
   return t('statusLocal');
+}
+
+/** Chip text for an item, preferring its live queue state during a push. */
+function itemStateLabel(item) {
+  const active = state.queue && state.queue.active;
+  if (active && item.queue) {
+    if (item.queue === 'queued' && item.status !== 'synced') return t('statusQueued');
+    if (item.queue === 'uploading') return t('statusPushing');
+    if (item.queue === 'retrying') {
+      return t('queueRetryCount', { n: Math.max(1, (item.queueAttempt || 1) - 1), max: PUSH_MAX_RETRIES });
+    }
+  }
+  if (item.queue === 'cancelled' && item.status !== 'synced') return t('statusCancelled');
+  return statusLabel(item.status);
 }
 
 function plural(key, n) {
@@ -320,15 +383,18 @@ function legacyCopy(text) {
   return ok;
 }
 
+/**
+ * Copy/paste output for an object. The snippet follows the object's real
+ * category: only images become image markup.
+ */
 function formatLink(item, format) {
-  const url = item.url;
-  if (!url) return '';
-  switch (format) {
-    case 'markdown': return '![' + item.name + '](' + url + ')';
-    case 'bbcode': return '[img]' + url + '[/img]';
-    case 'html': return '<img src="' + url + '" alt="' + escapeHtml(item.name) + '">';
-    default: return url;
-  }
+  if (!item || !item.url) return '';
+  return formatOutput({
+    url: item.url,
+    name: item.name,
+    mime: item.type,
+    category: itemCategory(item),
+  }, format);
 }
 
 function escapeHtml(text) {
@@ -436,6 +502,7 @@ async function addFiles(fileList, albumId) {
   for (const file of files) {
     const item = {
       id: uid(),
+      seq: ++stageSeq,
       name: file.name || 'untitled',
       type: file.type || '',
       size: file.size || 0,
@@ -503,73 +570,36 @@ async function removeItem(id) {
   render();
 }
 
-async function pushItems(ids) {
-  if (!state.online) {
-    showToast(t('offlinePush'));
-    return;
-  }
-  const targets = state.items.filter((item) => {
-    if (ids && ids.indexOf(item.id) === -1) return false;
-    return (item.status === 'pending' || item.status === 'failed') && item.file;
-  });
-  if (!targets.length) {
-    showToast(t('pushNothing'));
-    return;
-  }
+/* ==================================================================== *
+ * Push — a deliberate, sequential, rate-limit-aware queue.
+ *
+ * One file is uploaded at a time, with a small jittered gap between files, a
+ * bounded exponential backoff for transient failures, and progress/ETA derived
+ * only from measurements this session actually made. The queue itself lives in
+ * js/push-queue.js; everything here adapts it to the workspace: the XHR
+ * uploader, the item catalog and the queue surface.
+ * ==================================================================== */
 
-  state.pushing = true;
-  renderChrome();
-
-  let cursor = 0;
-  let active = 0;
-  let failed = 0;
-  const total = targets.length;
-  let done = 0;
-
-  await new Promise((resolve) => {
-    const pump = () => {
-      while (active < MAX_CONCURRENT && cursor < targets.length) {
-        const item = targets[cursor++];
-        active++;
-        uploadItem(item).then((ok) => {
-          if (!ok) failed++;
-          done++;
-          active--;
-          updatePushMeter(done, total);
-          announce(t('announcePushing', { current: done, total }));
-          if (done === total) resolve();
-          else pump();
-        });
-      }
-    };
-    pump();
-  });
-
-  state.pushing = false;
-  updatePushMeter(0, 0);
-  showToast(failed ? t('pushPartial') : t('pushComplete'));
-  render();
-
-  // Album organization is persisted after the objects exist remotely, so a
-  // staged file can be filed locally first and keep that album after Push.
-  if (unsyncedAlbumWork().total) await syncAlbums({ silent: true });
+/** Staging order: sequence first, then time added, then id as a last resort. */
+function byStagingOrder(a, b) {
+  return (a.seq || 0) - (b.seq || 0)
+    || (a.addedAt || 0) - (b.addedAt || 0)
+    || String(a.id).localeCompare(String(b.id));
 }
 
-function updatePushMeter(done, total) {
-  const meter = $('push-meter');
-  const bar = meter && meter.firstElementChild;
-  if (!meter || !bar) return;
-  if (!total || done >= total) {
-    meter.hidden = true;
-    bar.style.width = '0';
-    return;
-  }
-  meter.hidden = false;
-  bar.style.width = Math.round((done / total) * 100) + '%';
+function queueEntryItem(entry) {
+  return findItem(entry.id);
 }
 
-function uploadItem(item) {
+/** Uploads one staged file through the existing /upload contract. */
+function uploadStagedFile(entry, ctx) {
+  const item = queueEntryItem(entry);
+  if (!item || !item.file) {
+    return Promise.resolve({ ok: false, retriable: false, error: t('pushMissingFile') });
+  }
+
   item.status = 'pushing';
+  item.queue = 'uploading';
   item.progress = 0;
   item.error = null;
   patchCard(item);
@@ -579,16 +609,18 @@ function uploadItem(item) {
     formData.append('file', item.file, item.name);
 
     const xhr = new XMLHttpRequest();
+    activeUpload = xhr;
     xhr.open('POST', '/upload');
 
     xhr.upload.onprogress = (event) => {
-      if (event.lengthComputable) {
-        item.progress = Math.round((event.loaded / event.total) * 100);
-        patchCard(item);
-      }
+      if (!event.lengthComputable) return;
+      item.progress = Math.round((event.loaded / event.total) * 100);
+      patchCard(item);
+      ctx.onProgress(event.loaded, event.total);
     };
 
     xhr.onload = () => {
+      activeUpload = null;
       let src = null;
       let errorMessage = null;
       try {
@@ -604,6 +636,7 @@ function uploadItem(item) {
 
       if (src) {
         item.status = 'synced';
+        item.queue = 'synced';
         item.progress = 100;
         item.src = src;
         item.url = location.origin + src;
@@ -619,31 +652,190 @@ function uploadItem(item) {
         announce(t('announcePushed', { name: item.name }));
         patchCard(item);
         renderLinks();
-        resolve(true);
-      } else {
-        failItem(item, errorMessage);
-        resolve(false);
+        resolve({ ok: true });
+        return;
       }
+
+      let retryAfterMs = null;
+      try { retryAfterMs = parseRetryAfter(xhr.getResponseHeader('Retry-After')); } catch (_) { /* header unavailable */ }
+      const verdict = classifyFailure({ status: xhr.status });
+      resolve({ ok: false, retriable: verdict.retriable, code: verdict.code, retryAfterMs, error: errorMessage });
     };
 
     xhr.onerror = () => {
-      failItem(item, t('networkError'));
-      resolve(false);
+      activeUpload = null;
+      const verdict = classifyFailure({ networkError: true });
+      resolve({ ok: false, retriable: verdict.retriable, code: verdict.code, error: t('networkError') });
     };
 
     xhr.send(formData);
   });
 }
 
-function failItem(item, message) {
-  item.status = 'failed';
-  item.progress = 100;
-  item.error = message || t('networkError');
-  idbPut(item);
-  announce(t('announceFailed', { name: item.name }));
-  patchCard(item);
+/** Mirrors queue state onto the catalog items so cards stay truthful. */
+function applyQueueToItems(snapshot) {
+  for (const entry of snapshot.entries) {
+    const item = findItem(entry.id);
+    if (!item) continue;
+    item.queue = entry.state;
+    item.queueAttempt = entry.attempt;
+    if (entry.state === 'uploading') {
+      item.status = 'pushing';
+    } else if (entry.state === 'retrying') {
+      item.status = 'pushing';
+      item.error = entry.error || item.error;
+    } else if (entry.state === 'failed') {
+      if (item.status !== 'failed') {
+        item.status = 'failed';
+        item.progress = 100;
+        item.error = entry.error || t('networkError');
+        idbPut(item);
+        announce(t('announceFailed', { name: item.name }));
+      }
+    } else if (entry.state === 'cancelled' || entry.state === 'queued') {
+      if (item.status !== 'synced') item.status = 'pending';
+    }
+  }
 }
 
+function ensureQueue() {
+  if (pushQueue) return pushQueue;
+  pushQueue = createPushQueue({
+    upload: uploadStagedFile,
+    delayMs: pushDelayMs(),
+    jitterRatio: PUSH_JITTER,
+    maxRetries: PUSH_MAX_RETRIES,
+    retryBaseMs: pushRetryBaseMs(),
+    isOnline: () => state.online,
+    onChange: (snapshot) => {
+      state.queue = snapshot;
+      applyQueueToItems(snapshot);
+      renderPushPanel();
+      renderChrome();
+    },
+  });
+  return pushQueue;
+}
+
+async function pushItems(ids) {
+  if (!state.online) {
+    showToast(t('offlinePush'));
+    return;
+  }
+  const targets = state.items.filter((item) => {
+    if (ids && ids.indexOf(item.id) === -1) return false;
+    return (item.status === 'pending' || item.status === 'failed') && item.file;
+  // Deterministic order: the order the files were staged in, regardless of how
+  // the browser view happens to be sorted. `seq` is monotonic, so files staged
+  // within the same millisecond keep their selection order.
+  }).sort(byStagingOrder);
+  if (!targets.length) {
+    showToast(t('pushNothing'));
+    return;
+  }
+
+  const queue = ensureQueue();
+  const snapshot = queue.getState();
+  // A finished batch is cleared before a new one starts so the surface always
+  // describes the push in front of the user.
+  if (!snapshot.active && (snapshot.phase === 'done' || snapshot.phase === 'cancelled')) queue.reset();
+
+  queue.enqueue(targets.map((item) => ({ id: item.id, name: item.name, size: item.size })));
+  state.pushing = true;
+  startQueueTicker();
+  renderChrome();
+
+  const result = await queue.start();
+
+  state.pushing = result.active;
+  stopQueueTicker();
+  renderPushPanel();
+  render();
+
+  if (result.phase === 'paused') return;
+
+  const { done, failed, cancelled } = result.stats;
+  if (result.phase === 'cancelled') {
+    showToast(t('queueCancelledToast', { n: cancelled }));
+  } else if (failed) {
+    showToast(t('queueSummary', { ok: done, failed, cancelled }));
+  } else if (done) {
+    showToast(t('pushComplete'));
+  }
+
+  // Album organization is persisted after the objects exist remotely, so a
+  // staged file can be filed locally first and keep that album after Push.
+  if (done && unsyncedAlbumWork().total) await syncAlbums({ silent: true });
+}
+
+function pauseQueue() {
+  if (!pushQueue) return;
+  pushQueue.pause();
+  announce(t('queuePausedAnnounce'));
+  renderPushPanel();
+}
+
+function resumeQueue() {
+  if (!pushQueue) return;
+  if (!state.online) {
+    showToast(t('offlinePush'));
+    return;
+  }
+  state.pushing = true;
+  startQueueTicker();
+  renderChrome();
+  pushQueue.resume().then((result) => {
+    state.pushing = result.active;
+    stopQueueTicker();
+    renderPushPanel();
+    render();
+  });
+}
+
+function cancelQueue() {
+  if (!pushQueue) return;
+  pushQueue.cancel();
+  announce(t('queueCancelledAnnounce'));
+  renderPushPanel();
+}
+
+function retryFailedQueue() {
+  if (!pushQueue) return;
+  if (!state.online) {
+    showToast(t('offlinePush'));
+    return;
+  }
+  // Failed files kept their local blob, so a retry needs no re-selection.
+  const retryable = state.items
+    .filter((item) => item.status === 'failed' && item.file)
+    .sort(byStagingOrder);
+  if (!retryable.length) {
+    showToast(t('pushNothing'));
+    return;
+  }
+  // Entries the queue already knows about are re-queued by retryFailed();
+  // anything else (a failure from an earlier, dismissed batch) is added first.
+  const known = new Set(pushQueue.getState().entries.map((entry) => entry.id));
+  const fresh = retryable.filter((item) => !known.has(item.id));
+  if (fresh.length) pushQueue.enqueue(fresh.map((item) => ({ id: item.id, name: item.name, size: item.size })));
+  state.pushing = true;
+  startQueueTicker();
+  pushQueue.retryFailed().then((result) => {
+    state.pushing = result.active;
+    stopQueueTicker();
+    renderPushPanel();
+    render();
+  });
+}
+
+function dismissQueue() {
+  if (pushQueue) pushQueue.reset();
+  state.queue = null;
+  renderPushPanel();
+  renderChrome();
+}
+
+/** Cheap in-place refresh of one card/row while its state changes. */
 function patchCard(item) {
   const card = document.querySelector('[data-id="' + item.id + '"]');
   if (!card) {
@@ -653,7 +845,7 @@ function patchCard(item) {
   const chip = card.querySelector('[data-role="status"]');
   if (chip) {
     chip.className = 'status-chip ' + item.status;
-    chip.textContent = statusLabel(item.status);
+    chip.textContent = itemStateLabel(item);
   }
   const bar = card.querySelector('.progress > i');
   if (bar) bar.style.width = (item.progress || 0) + '%';
@@ -664,6 +856,126 @@ function patchCard(item) {
   card.classList.toggle('pushing', item.status === 'pushing');
   card.classList.toggle('failed', item.status === 'failed');
   renderChrome();
+}
+
+/* --------------------------- queue rendering -------------------------- */
+
+function startQueueTicker() {
+  if (queueTicker) return;
+  // A slow tick is enough for a countdown and keeps the surface calm.
+  queueTicker = setInterval(() => {
+    if (!state.queue) return;
+    state.queue = pushQueue ? pushQueue.getState() : state.queue;
+    renderPushPanel();
+  }, 250);
+}
+
+function stopQueueTicker() {
+  if (!queueTicker) return;
+  clearInterval(queueTicker);
+  queueTicker = null;
+}
+
+function formatDuration(ms) {
+  const seconds = Math.max(1, Math.round(ms / 1000));
+  if (seconds < 60) return t('durationSeconds', { n: seconds });
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  if (minutes < 60) {
+    return rest ? t('durationMinutesSeconds', { m: minutes, s: rest }) : t('durationMinutes', { n: minutes });
+  }
+  return t('durationMinutes', { n: minutes });
+}
+
+function queuePhaseLabel(snapshot) {
+  return t({
+    uploading: 'queuePhaseUploading',
+    waiting: 'queuePhaseWaiting',
+    retrying: 'queuePhaseRetrying',
+    paused: 'queuePhasePaused',
+    done: 'queuePhaseDone',
+    cancelled: 'queuePhaseCancelled',
+    idle: 'queuePhaseIdle',
+  }[snapshot.phase] || 'queuePhaseIdle');
+}
+
+function renderPushPanel() {
+  const panel = $('push-panel');
+  if (!panel) return;
+  const snapshot = state.queue;
+  if (!snapshot || !snapshot.stats.total) {
+    panel.hidden = true;
+    return;
+  }
+  panel.hidden = false;
+
+  const s = snapshot.stats;
+  const finished = snapshot.phase === 'done' || snapshot.phase === 'cancelled';
+  $('push-phase').textContent = queuePhaseLabel(snapshot);
+
+  // Overall progress prefers real bytes and degrades to file counts when the
+  // browser cannot report them.
+  const useBytes = s.bytesTotal > 0;
+  const ratio = useBytes
+    ? s.bytesDone / s.bytesTotal
+    : (s.total ? s.processed / s.total : 0);
+  const percent = Math.max(0, Math.min(100, Math.round(ratio * 100)));
+  const bar = $('push-bar');
+  const fill = $('push-bar-fill');
+  if (fill) fill.style.width = percent + '%';
+  if (bar) {
+    bar.setAttribute('aria-valuenow', String(percent));
+    bar.setAttribute('aria-label', t('queueProgress', { done: s.processed, total: s.total }));
+  }
+
+  const parts = [t('queueProgress', { done: Math.min(s.processed + (snapshot.current ? 1 : 0), s.total), total: s.total })];
+  if (useBytes) parts.push(t('queueBytes', { done: formatSize(s.bytesDone), total: formatSize(s.bytesTotal) }));
+  if (!finished) {
+    const eta = roundEtaMs(snapshot.etaMs);
+    parts.push(eta == null ? t('queueEstimating') : t('queueEta', { time: formatDuration(eta) }));
+  }
+  $('push-progress-text').textContent = parts.join(' · ');
+
+  const current = $('push-current');
+  if (snapshot.current) {
+    current.hidden = false;
+    $('push-current-name').textContent = snapshot.current.name;
+    $('push-current-state').textContent = snapshot.current.attempt > 1
+      ? t('queueRetryCount', { n: snapshot.current.attempt - 1, max: snapshot.config.maxRetries })
+      : t('queuePhaseUploading');
+    $('push-current-fill').style.width = Math.round((snapshot.current.progress || 0) * 100) + '%';
+  } else {
+    current.hidden = true;
+  }
+
+  const note = $('push-note');
+  if (finished) {
+    note.textContent = t('queueSummary', { ok: s.done, failed: s.failed, cancelled: s.cancelled });
+  } else if (snapshot.phase === 'waiting') {
+    note.textContent = t('queueWaitingNext', { s: (snapshot.waitMsRemaining / 1000).toFixed(1) });
+  } else if (snapshot.phase === 'retrying' && snapshot.retrying) {
+    note.textContent = t('queueRetryIn', {
+      s: Math.ceil(snapshot.waitMsRemaining / 1000),
+      name: snapshot.retrying.name,
+    });
+  } else if (snapshot.phase === 'paused') {
+    note.textContent = t('queuePausedNote', { n: s.remaining });
+  } else {
+    note.textContent = '';
+  }
+
+  const pause = $('push-pause');
+  const cancel = $('push-cancel');
+  const retry = $('push-retry-failed');
+  const dismiss = $('push-dismiss');
+  pause.hidden = finished;
+  pause.textContent = snapshot.phase === 'paused' ? t('queueResume') : t('queuePause');
+  pause.disabled = snapshot.phase === 'paused' && !state.online;
+  cancel.hidden = finished;
+  cancel.disabled = false;
+  retry.hidden = !finished || (s.failed === 0 && s.cancelled === 0);
+  retry.textContent = s.failed ? t('queueRetryFailed') : t('queueResumeRemaining');
+  dismiss.hidden = !finished;
 }
 
 function glyph(item) {
@@ -1652,6 +1964,7 @@ function render() {
   applyStaticI18n(document);
   applyTheme();
   renderChrome();
+  renderPushPanel();
   renderAlbumTree();
   renderChanges();
   renderBrowser();
@@ -1673,6 +1986,8 @@ function renderChrome() {
   $('view-grid').setAttribute('aria-pressed', state.layout === 'grid' ? 'true' : 'false');
   $('view-list').setAttribute('aria-pressed', state.layout === 'list' ? 'true' : 'false');
   $('sort-select').value = state.sort;
+
+  updateFooterMeter();
 
   const push = $('push-changes');
   const pushLabel = $('push-label');
@@ -1718,6 +2033,23 @@ function renderChrome() {
   const clear = $('search-clear');
   if (clear) clear.hidden = !state.query;
   renderBulkBar();
+}
+
+/** Footer hairline progress: overall bytes when known, file counts otherwise. */
+function updateFooterMeter() {
+  const meter = $('push-meter');
+  const bar = meter && meter.firstElementChild;
+  if (!meter || !bar) return;
+  const snapshot = state.queue;
+  if (!snapshot || !snapshot.active || !snapshot.stats.total) {
+    meter.hidden = true;
+    bar.style.width = '0';
+    return;
+  }
+  const s = snapshot.stats;
+  const ratio = s.bytesTotal > 0 ? s.bytesDone / s.bytesTotal : s.processed / s.total;
+  meter.hidden = false;
+  bar.style.width = Math.round(Math.max(0, Math.min(1, ratio)) * 100) + '%';
 }
 
 function renderBulkBar() {
@@ -1777,7 +2109,7 @@ function buildChangeRow(item) {
   body.textContent = item.name;
   const meta = document.createElement('div');
   meta.className = 'change-meta';
-  meta.textContent = formatSize(item.size) + ' · ' + statusLabel(item.status);
+  meta.textContent = formatSize(item.size) + ' · ' + itemStateLabel(item);
   const actions = document.createElement('div');
   actions.className = 'change-actions';
   const review = document.createElement('button');
@@ -1971,7 +2303,7 @@ function buildCard(item) {
   const chip = document.createElement('span');
   chip.className = 'status-chip ' + item.status;
   chip.dataset.role = 'status';
-  chip.textContent = statusLabel(item.status);
+  chip.textContent = itemStateLabel(item);
 
   const progress = document.createElement('div');
   progress.className = 'progress';
@@ -2127,7 +2459,7 @@ function buildRow(item) {
   const status = document.createElement('span');
   status.className = 'status-chip ' + item.status;
   status.dataset.role = 'status';
-  status.textContent = statusLabel(item.status);
+  status.textContent = itemStateLabel(item);
 
   const more = iconAction('more', t('cardMenuAria', { name: item.name }), (event) => {
     event.stopPropagation();
@@ -2234,8 +2566,9 @@ function renderLinks() {
 
 function previewSet() {
   const items = visibleItems();
-  const images = items.filter(isImage);
-  return images.length ? images : items;
+  // Stepping through a folder should walk the things that actually render.
+  const media = items.filter((item) => previewKind({ mime: item.type, name: item.name }) !== 'file');
+  return media.length ? media : items;
 }
 
 function openPreview(id) {
@@ -2247,6 +2580,87 @@ function openPreview(id) {
   openOverlayDialog($('preview-dialog'));
 }
 
+/**
+ * Preview surface for an object, chosen from its real MIME category. A binary
+ * file is never rendered as an image just because of its filename.
+ */
+function buildPreviewSurface(item) {
+  const kind = previewKind({ mime: item.type, name: item.name });
+  const src = item.url || localPreview(item);
+
+  if (kind === 'image' && src) {
+    const img = document.createElement('img');
+    img.alt = item.name;
+    img.src = src;
+    img.addEventListener('click', () => {
+      state.previewZoom = !state.previewZoom;
+      $('preview-stage').classList.toggle('zoomed', state.previewZoom);
+    });
+    return img;
+  }
+
+  if (kind === 'audio' && src) {
+    const wrap = document.createElement('div');
+    wrap.className = 'preview-media audio';
+    const audio = document.createElement('audio');
+    audio.controls = true;
+    audio.preload = 'metadata';
+    audio.src = src;
+    audio.setAttribute('aria-label', t('previewAudioAria', { name: item.name }));
+    const caption = document.createElement('p');
+    caption.className = 'preview-caption';
+    caption.textContent = t('previewAudio');
+    wrap.appendChild(audio);
+    wrap.appendChild(caption);
+    return wrap;
+  }
+
+  if (kind === 'video' && src) {
+    const video = document.createElement('video');
+    video.controls = true;
+    video.preload = 'metadata';
+    video.src = src;
+    video.className = 'preview-media video';
+    video.setAttribute('aria-label', t('previewVideoAria', { name: item.name }));
+    return video;
+  }
+
+  if (kind === 'pdf' && src) {
+    const wrap = document.createElement('div');
+    wrap.className = 'preview-media document';
+    const frame = document.createElement('iframe');
+    frame.src = src;
+    frame.title = t('previewPdfAria', { name: item.name });
+    frame.loading = 'lazy';
+    wrap.appendChild(frame);
+    const link = document.createElement('a');
+    link.href = src;
+    link.target = '_blank';
+    link.rel = 'noopener';
+    link.className = 'preview-caption';
+    link.textContent = t('previewOpenExternally');
+    wrap.appendChild(link);
+    return wrap;
+  }
+
+  // Generic, honest surface: what it is, how big, and how to get it.
+  const wrap = document.createElement('div');
+  wrap.className = 'preview-generic';
+  const glyphWrap = document.createElement('div');
+  glyphWrap.className = 'file-glyph';
+  glyphWrap.style.height = '160px';
+  const ext = document.createElement('span');
+  ext.className = 'ext';
+  ext.textContent = extOf(item.name);
+  glyphWrap.appendChild(ext);
+  const label = document.createElement('p');
+  label.className = 'preview-caption';
+  label.textContent = t(categoryLabelKey(itemCategory(item))) + ' · ' + t('previewNoInline');
+  wrap.appendChild(glyphWrap);
+  wrap.appendChild(label);
+  return wrap;
+}
+
 function fillPreview(item) {
   if (!item) return;
   $('preview-title').textContent = item.name;
@@ -2254,34 +2668,13 @@ function fillPreview(item) {
   $('meta-dims').textContent = item.width && item.height ? item.width + ' × ' + item.height : t('noDimensions');
   $('meta-mime').textContent = item.type || t('unknownType');
   $('meta-size').textContent = formatSize(item.size);
-  $('meta-status').textContent = statusLabel(item.status) + (item.error ? ' — ' + item.error : '');
+  $('meta-status').textContent = itemStateLabel(item) + (item.error ? ' — ' + item.error : '');
   $('meta-url').value = item.url || t('noPublicUrl');
 
   const stage = $('preview-stage');
   stage.classList.toggle('zoomed', !!state.previewZoom);
   stage.replaceChildren();
-  if (isImage(item)) {
-    const src = item.url || localPreview(item);
-    if (src) {
-      const img = document.createElement('img');
-      img.alt = item.name;
-      img.src = src;
-      img.addEventListener('click', () => {
-        state.previewZoom = !state.previewZoom;
-        stage.classList.toggle('zoomed', state.previewZoom);
-      });
-      stage.appendChild(img);
-    }
-  } else {
-    const glyphWrap = document.createElement('div');
-    glyphWrap.className = 'file-glyph';
-    glyphWrap.style.height = '180px';
-    const ext = document.createElement('span');
-    ext.className = 'ext';
-    ext.textContent = extOf(item.name);
-    glyphWrap.appendChild(ext);
-    stage.appendChild(glyphWrap);
-  }
+  stage.appendChild(buildPreviewSurface(item));
 
   const copyBtn = $('preview-copy');
   copyBtn.disabled = !item.url;
@@ -2586,6 +2979,14 @@ function wireEvents() {
   });
 
   $('push-changes').addEventListener('click', () => pushItems());
+  if ($('push-pause')) $('push-pause').addEventListener('click', () => {
+    const snapshot = state.queue;
+    if (snapshot && snapshot.phase === 'paused') resumeQueue();
+    else pauseQueue();
+  });
+  if ($('push-cancel')) $('push-cancel').addEventListener('click', cancelQueue);
+  if ($('push-retry-failed')) $('push-retry-failed').addEventListener('click', retryFailedQueue);
+  if ($('push-dismiss')) $('push-dismiss').addEventListener('click', dismissQueue);
   if ($('new-album-btn')) $('new-album-btn').addEventListener('click', () => openAlbumDialog({ mode: 'create', parentId: currentAlbumId() }));
   if ($('album-new')) $('album-new').addEventListener('click', () => openAlbumDialog({ mode: 'create', parentId: state.view === 'albums' ? currentAlbumId() : null }));
   if ($('album-sync-btn')) $('album-sync-btn').addEventListener('click', () => syncAlbums());
@@ -3001,6 +3402,7 @@ async function restoreLocal() {
       type: record.type || '',
       size: record.size || 0,
       addedAt: record.addedAt || Date.now(),
+      seq: record.seq || 0,
       pushedAt: record.pushedAt || null,
       status: record.status || (record.url ? 'synced' : 'pending'),
       src: record.src || null,
@@ -3015,6 +3417,7 @@ async function restoreLocal() {
       previewUrl: null,
     };
     if (item.status === 'pushing') item.status = 'pending';
+    stageSeq = Math.max(stageSeq, item.seq || 0);
     return item;
   }).sort((a, b) => (b.addedAt || 0) - (a.addedAt || 0));
 }
