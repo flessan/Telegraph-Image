@@ -124,6 +124,12 @@ Bindings (`Settings` -> `Functions`):
 
 10. Deployment self-check: when configuration is incomplete the homepage says which environment variable or binding is missing and where to set it, instead of failing on the first upload
 
+11. Nested **Albums**: organize objects into folder-like collections in both the public workspace and the dashboard. Albums are a pure organization layer — an object's id, public `/file/...` URL, storage location and moderation state never change when it is filed, renamed around or moved
+
+12. Deliberate, sequential **Push**: staged files upload one at a time with a small spaced gap, bounded exponential backoff for transient failures (429/5xx/network), live progress and a measured ETA, plus Pause / Cancel / Retry failed controls
+
+13. **MIME-aware links and previews**: images, audio, video, PDFs and generic files each get the right preview surface and the right URL / Markdown / BBCode / HTML snippet — non-images never become `<img>` or `![](…)`
+
 ## Optional Features Guide
 
 ### Image Management Dashboard
@@ -178,6 +184,62 @@ The default model is Llama 3.2 Vision (`@cf/meta/llama-3.2-11b-vision-instruct`)
 > moderatecontent.com has stopped accepting new registrations. This provider is kept only for deployments that already have a working API key. Note that it can only review files uploaded through the old Telegraph channel (it fetches the image from `telegra.ph`); files uploaded via the Telegram Bot API cannot be reviewed by it — use the Workers AI provider instead.
 
 If you have an existing key, set `ModerateContentApiKey` as before; it keeps working unchanged. To turn review off entirely regardless of other settings, set `MODERATION_PROVIDER=none`.
+
+### Push Queue (sequential uploads)
+
+Nothing is uploaded while you stage files; **Push changes** is the only network boundary. When it runs:
+
+- Files upload **one at a time**, in the order they were staged, with a short jittered gap (default 1.2s) between them so a large batch never becomes a burst.
+- Transient failures (network errors, `429`, `408`, `5xx`) are retried up to 3 times with exponential backoff and jitter, and a `Retry-After` response header is honoured up to a 60s cap. Permanent failures (e.g. `4xx`) are never retried.
+- A permanently failed file does not block the batch: later files continue, the failure stays visible, and **Retry failed** re-sends only those files.
+- Progress, transferred bytes and the remaining-time estimate come from real measurements taken during this batch (upload durations and throughput); before there is any data the UI says `estimating…` rather than inventing a number.
+- **Pause** lets the in-flight request finish and then stops; **Cancel** stops starting new uploads. In both cases the remaining files stay staged locally and can be pushed later.
+
+Two advanced intervals are read from the workspace preferences (`ti.prefs` in `localStorage`) if present, otherwise defaults are used:
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `pushDelayMs` | `1200` | Gap between two uploads (±25% jitter), 0–60000 |
+| `pushRetryBaseMs` | `2000` | First retry backoff; doubles per attempt, capped at 30s |
+
+### MIME-Aware Links and Previews
+
+Every object is presented as what it actually is. The declared MIME type is authoritative (`File.type` for staged files); the filename extension is only used as a fallback when no MIME type is available — which is the case for objects listed by the dashboard, since the stored metadata has no MIME field.
+
+| Category | Preview | HTML snippet | Markdown | BBCode |
+| --- | --- | --- | --- | --- |
+| Image | Image viewer | `<img src alt loading="lazy">` | `![name](url)` | `[img]url[/img]` |
+| Audio | Audio player | `<audio controls preload="metadata" src>` | `[name](url)` | `[url=…]name[/url]` |
+| Video | Video player | `<video controls preload="metadata" src>` | `[name](url)` | `[url=…]name[/url]` |
+| PDF | Embedded document view | `<iframe src title>` | `[name](url)` | `[url=…]name[/url]` |
+| Text / archive / other | Generic file surface with metadata and Download | `<a href download>name</a>` | `[name](url)` | `[url=…]name[/url]` |
+
+The direct **URL** output is always the untouched public `/file/...` URL. Filenames are escaped per output syntax (HTML entities, Markdown escapes, BBCode bracket entities), so a filename can never inject markup into a copied snippet.
+
+### Albums
+
+Albums group objects into a nested, Drive-like hierarchy in the public workspace (`/`) and in the Remote Storage Console (`/admin.html`). They are enabled automatically and need **no new binding or environment variable**.
+
+How it works:
+
+- **Storage.** Album records are stored in the existing `img_url` KV namespace under the reserved `album:<id>` prefix (the dashboard already hides `namespace:` keys from the file list). An object's membership is a single extra `albumId` field on its existing KV metadata.
+- **Stable identity.** Albums are referenced by a stable id (`alb_…`), never by name, so renaming an album never detaches its children or its objects. Filing an object **does not** change its id, filename, public URL, short link, storage provider, like state or moderation flags.
+- **Non-destructive deletion.** Deleting an album removes the album only. Its child albums are lifted to the deleted album's parent, its objects keep their public URLs, and memberships that point at a removed album simply resolve back to the root. Deleting objects remains a separate, explicit action.
+- **Bounded trees.** Nesting is limited to 8 levels, duplicate sibling names are rejected, and an album can never be moved into itself or one of its descendants.
+- **Local-first.** In the public workspace you can create albums and file staged files into them entirely offline; nothing is uploaded until you press **Push**. Album records that are not yet stored remotely are marked *Local only*. Pushing uploads the objects through the existing `/upload` endpoint and then persists the album relationships.
+
+Album management API (behind the existing dashboard session/Basic auth, same as every other `/api/manage/*` route):
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/manage/albums` | List album records |
+| `POST` | `/api/manage/albums` | Create an album `{ name, parentId?, id? }` (passing `id` makes retries idempotent) |
+| `GET` | `/api/manage/albums/:id` | Album, its root-to-node path and its direct children |
+| `PATCH` | `/api/manage/albums/:id` | Rename and/or move `{ name?, parentId? }` |
+| `DELETE` | `/api/manage/albums/:id` | Delete the album record only — never its objects |
+| `POST` | `/api/manage/albums/assign` | File objects: `{ albumId: string|null, ids: string[] }` |
+
+Deployments that never create an album are unaffected: no album keys exist, objects carry no `albumId`, and every existing endpoint behaves exactly as before.
 
 ### Anti-Hotlinking
 

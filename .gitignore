@@ -4,3 +4,5 @@ node_modules/.mf/*
 data/*
 data-broken/*
 test/e2e/output/*
+test/e2e/output-albums/*
+test/e2e/output-push/*
