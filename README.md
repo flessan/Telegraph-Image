@@ -1,6 +1,6 @@
-# Telegraph-Image
+# Telegraph Storage — customized Telegraph-Image fork
 
-Free Image Hosting solution, Flickr/imgur alternative. Using Cloudflare Pages and the Telegram Bot API (Telegram Channel).
+A local-first storage workspace built on Telegraph-Image. This fork keeps the existing Cloudflare Pages, Telegram/R2 storage, upload API, moderation, and stable `/file/*` serving paths, while reorganizing the interface into a public product page, focused sign-in, and one complete dashboard.
 
 English|[中文](README-zh.md)
 
@@ -34,7 +34,7 @@ English|[中文](README-zh.md)
 
 3. After deployment, go to the project's `Settings` -> `Environment Variables`, add `TG_Bot_Token` and `TG_Chat_ID` (see [the next section](#how-to-obtain-telegram-bot_token-and-chat_id) for how to obtain them), save, then go to the `Deployments` page and **redeploy once**
 
-Done! Open your `*.pages.dev` domain and start uploading. For the dashboard, upload protection, short links, and more, see the [Optional Features Guide](#optional-features-guide).
+Done! Open your `*.pages.dev` domain to read the product overview, then choose **Open Dashboard**. The canonical routes are `/` for the landing page, `/login` for GUI sign-in, and `/admin` for staging, sequential Push, Albums, public-link output, and remote management.
 
 ## How to Obtain Telegram `Bot_Token` and `Chat_ID`
 
@@ -90,7 +90,7 @@ Optional environment variables (enable features as needed, see the [Optional Fea
 | `SITE_NAME`         | `My Images`               | Site name shown in the homepage header (served to the frontend via `GET /api/config`). |
 | `SITE_TITLE`        | `My Images \| Home`       | Browser tab title of the homepage.                                                    |
 | `SITE_BACKGROUND`   | `https://.../bg.jpg`      | Background image URL for the homepage.                                                |
-| `HIDE_ADMIN_ENTRY`  | `true`                    | Hides the dashboard link on the homepage (the /admin page itself stays reachable).    |
+| `HIDE_ADMIN_ENTRY`  | `true`                    | Legacy/custom-frontend hint returned by `/api/config`; the product landing keeps its canonical `/admin` action visible. |
 | `WhiteList_Mode`    | `true`                    | Whitelist mode: only whitelisted images can be loaded.                                |
 | `disable_telemetry` | `true`                    | Opt out of remote telemetry.                                                          |
 
@@ -122,9 +122,9 @@ Bindings (`Settings` -> `Functions`):
 
 9. Batch upload with drag & drop and paste support, per-file progress, and one-click copy as URL / Markdown / BBCode / HTML; optional anti-hotlinking via a referer allowlist
 
-10. Deployment self-check: when configuration is incomplete the homepage says which environment variable or binding is missing and where to set it, instead of failing on the first upload
+10. Deployment self-check: when configuration is incomplete the dashboard says which environment variable or binding is missing and where to set it, instead of failing on the first Push
 
-11. Nested **Albums**: organize objects into folder-like collections in both the public workspace and the dashboard. Albums are a pure organization layer — an object's id, public `/file/...` URL, storage location and moderation state never change when it is filed, renamed around or moved
+11. Nested **Albums**: organize objects into folder-like collections in the dashboard. Albums are a pure organization layer — an object's id, public `/file/...` URL, storage location and moderation state never change when it is filed, renamed around or moved
 
 12. Deliberate, sequential **Push**: staged files upload one at a time with a small spaced gap, bounded exponential backoff for transient failures (429/5xx/network), live progress and a measured ETA, plus Pause / Cancel / Retry failed controls
 
@@ -132,14 +132,14 @@ Bindings (`Settings` -> `Functions`):
 
 ## Optional Features Guide
 
-### Image Management Dashboard
+### Telegraph Storage Dashboard
 
 Disabled by default. To enable: in the Cloudflare Pages backend, click `Settings` -> `Functions` -> `KV namespace bindings` -> `Edit bindings`, enter `img_url` as the `Variable name`, select a pre-created KV namespace as the `KV namespace`, redeploy, then visit http(s)://your-domain/admin to open the dashboard
 
 ![](https://im.gurl.eu.org/file/a0c212d5dfb61f3652d07.png)
 ![](https://im.gurl.eu.org/file/48b9316ed018b2cb67cf4.png)
 
-The dashboard (Remote Storage Console) supports: an at-a-glance overview, filename search, paginated loading, grid/list/masonry views, online preview, a detail side sheet with metadata inspection, copy URL (direct/Markdown/BBCode/HTML), rename, like/save, blacklist/whitelist management, multi-select bulk actions, record deletion, and a keyboard-first command palette. See the [Update Log](#update-log) for detailed descriptions and screenshots of each feature.
+The `/admin` dashboard combines browser-local staging with the remote management index. Added files remain local until an explicit **Push**, which sends one request at a time with an inter-file delay, bounded retry/backoff, pause/cancel controls, partial-failure reporting, and retry-failed support. The same workspace provides filename search, paginated remote loading, grid/list/masonry views, MIME-aware previews, nested Albums, safe URL/Markdown/BBCode/HTML output, rename, save/unsave, blacklist/whitelist management, multi-select bulk actions, record deletion, tools, and a keyboard-first command palette.
 
 Note: the dashboard "delete" action only removes the record from the list; it does not delete the source file from Telegram. To prevent a file from loading, use the blacklist feature.
 
@@ -153,7 +153,7 @@ Disabled by default. To enable, add the following environment variables:
 | `BASIC_PASS` | Dashboard login password |
 | `SESSION_SECRET` | (Recommended) A long random string used to sign sign-in sessions |
 
-The admin area ships with a Material 3 sign-in screen at `/login.html`. After signing in, an **HttpOnly, Secure, SameSite=Lax** session cookie is issued (valid for 7 days); credentials are never stored in the browser. If `BASIC_USER` is left unset, the dashboard stays open without a login — this keeps it compatible with Cloudflare Access or any reverse proxy that already authenticates traffic. Set `SESSION_SECRET` to a long random value in production; when it is unset it is derived from `BASIC_USER`/`BASIC_PASS` so upgrades require no new configuration.
+The admin area ships with a Material 3 sign-in screen at `/login`. After signing in, an **HttpOnly, Secure, SameSite=Lax** session cookie is issued (valid for 7 days); credentials are never stored in the browser. If `BASIC_USER` is left unset, the dashboard stays open without a login — this keeps it compatible with Cloudflare Access or any reverse proxy that already authenticates traffic. Set `SESSION_SECRET` to a long random value in production; when it is unset it is derived from `BASIC_USER`/`BASIC_PASS` so upgrades require no new configuration.
 
 The legacy HTTP Basic scheme is still accepted as a deliberate fallback for scripts and `curl`, but the API no longer sends a `WWW-Authenticate` challenge, so browsers are never prompted with the native credential dialog — the GUI handles sign-in instead. Endpoints: `POST /api/manage/login` (JSON `{user,password}`), `POST /api/manage/logout`, and `GET /api/manage/session`. To front the dashboard with Cloudflare Access, protect both `/admin` and `/api/manage/*`.
 
@@ -218,7 +218,7 @@ The direct **URL** output is always the untouched public `/file/...` URL. Filena
 
 ### Albums
 
-Albums group objects into a nested, Drive-like hierarchy in the public workspace (`/`) and in the Remote Storage Console (`/admin.html`). They are enabled automatically and need **no new binding or environment variable**.
+Albums group local staged files and remote objects into a nested, Drive-like hierarchy in the unified dashboard (`/admin`). They are enabled automatically and need **no new binding or environment variable**.
 
 How it works:
 
@@ -226,7 +226,7 @@ How it works:
 - **Stable identity.** Albums are referenced by a stable id (`alb_…`), never by name, so renaming an album never detaches its children or its objects. Filing an object **does not** change its id, filename, public URL, short link, storage provider, like state or moderation flags.
 - **Non-destructive deletion.** Deleting an album removes the album only. Its child albums are lifted to the deleted album's parent, its objects keep their public URLs, and memberships that point at a removed album simply resolve back to the root. Deleting objects remains a separate, explicit action.
 - **Bounded trees.** Nesting is limited to 8 levels, duplicate sibling names are rejected, and an album can never be moved into itself or one of its descendants.
-- **Local-first.** In the public workspace you can create albums and file staged files into them entirely offline; nothing is uploaded until you press **Push**. Album records that are not yet stored remotely are marked *Local only*. Pushing uploads the objects through the existing `/upload` endpoint and then persists the album relationships.
+- **Local-first.** In the dashboard you can create albums and file staged files into them entirely offline; nothing is uploaded until you press **Push**. Album records that are not yet stored remotely are marked *Local only*. Pushing uploads the objects through the existing `/upload` endpoint and then persists the album relationships.
 
 Album management API (behind the existing dashboard session/Basic auth, same as every other `/api/manage/*` route):
 
@@ -256,7 +256,7 @@ Switching is safe at any time: R2 file ids are self-describing (`/file/r2-...`),
 
 ### Site Customization
 
-The homepage reads its configuration from `GET /api/config` at load time, so you can rebrand without editing any HTML: set `SITE_NAME` (header), `SITE_TITLE` (browser tab), `SITE_BACKGROUND` (background image URL), and `HIDE_ADMIN_ENTRY=true` to hide the dashboard link. The same endpoint is available to any custom frontend you build against this backend.
+The landing page and dashboard read public configuration from `GET /api/config`, so `SITE_NAME`, `SITE_TITLE`, and `SITE_BACKGROUND` continue to work without editing HTML. The landing page always keeps its canonical **Open Dashboard** path visible; `HIDE_ADMIN_ENTRY` remains available to custom frontends consuming this endpoint.
 
 ### Whitelist Mode
 
@@ -358,18 +358,24 @@ npm run test:e2e   # terminal 2
 
 The end-to-end suite covers batch upload, drag-and-drop, file retrieval and Content-Type, all four output formats, the setup self-check notice, and the dashboard; screenshots land in `test/e2e/output/`. Env vars: `E2E_BASE_URL` (default http://localhost:8080) and `E2E_CHROMIUM` (path to a Chromium binary, for environments where Playwright cannot download its own).
 
-> The admin console (`/admin`) is a dependency-free static page that shares the Material 3 design system with the homepage, so it renders with no external CDN dependency. The end-to-end suite uses HTTP Basic credentials (`BASIC_USER=admin`/`BASIC_PASS=123` in `npm start`) to pass the management API.
+> The dashboard (`/admin`) is a dependency-free static page that shares the Material 3 design system with the landing and sign-in pages, so it renders with no external CDN dependency. The end-to-end suite signs in through the GUI with `BASIC_USER=admin` / `BASIC_PASS=123` from `npm start`; if Chromium is unavailable, it reports that limitation explicitly.
 
 ### Thanks
 
 Ideas and code provided by Hostloc @feixiang and @乌拉擦
 
 ## Update Log
+August 19, 2026 - Telegraph Storage Interface Consolidation
+
+- Reorganized `/` as a concise product/about page for this customized fork, with `/admin` as the single storage workspace and `/login` as the focused GUI sign-in.
+- Unified local staging, explicit sequential Push, Albums, MIME-aware previews and safe public-link output with paginated remote browsing, moderation, metadata actions, bulk operations, tools, and responsive navigation.
+- Kept `/file/*`, object IDs, provider behavior, upload/auth/API contracts, and non-destructive Album semantics unchanged. Former `index-nuxt.html` and `index-md.html` entry points are loop-free compatibility bridges to `/admin`.
+
 August 18, 2026 - Material 3 Remote Storage Console & GUI Sign-In
 
 - **Rebuilt the admin dashboard as the Material 3 "Remote Storage Console"** (`/admin`): a concise overview, a remote object browser with grid/list/masonry layouts, search and sorting, paginated load-more, an object-detail side sheet, copy URL in direct/Markdown/BBCode/HTML, rename, like/save, whitelist/blacklist, multi-select bulk actions, broken-link check, a keyboard command palette (⌘K), snackbars/dialogs instead of browser `alert()`/`confirm()`, responsive layouts, and full English/Bahasa Indonesia localization. The legacy Vue 2 + Element UI pages (`admin-imgtc`, `admin-waterfall`) are removed; their real capabilities were migrated.
-- **Proper GUI sign-in** at `/login.html` with username/password fields, show/hide password, loading/validation/error states, theme and language support. Sessions use an HMAC-signed **HttpOnly, Secure, SameSite** cookie (7 days); no credentials or tokens are stored in `localStorage`. New minimal auth endpoints: `POST /api/manage/login`, `POST /api/manage/logout`, `GET /api/manage/session`. HTTP Basic remains accepted as a fallback for scripts/curl but no longer triggers the browser's native credential dialog. Optional `SESSION_SECRET` env var signs sessions (derived from `BASIC_USER`/`BASIC_PASS` when unset). No new account system — upload, storage, Telegram/R2, file serving, and public URLs are unchanged.
-- **Shared design foundation** (`/css/app.css`): Material 3 color tokens, typography, spacing, elevation, motion, and reusable buttons/fields/dialogs/sheets/snackbars/menus/command palette used by both the public workspace and the admin console.
+- **Proper GUI sign-in** at `/login` with username/password fields, show/hide password, loading/validation/error states, theme and language support. Sessions use an HMAC-signed **HttpOnly, Secure, SameSite** cookie (7 days); no credentials or tokens are stored in `localStorage`. New minimal auth endpoints: `POST /api/manage/login`, `POST /api/manage/logout`, `GET /api/manage/session`. HTTP Basic remains accepted as a fallback for scripts/curl but no longer triggers the browser's native credential dialog. Optional `SESSION_SECRET` env var signs sessions (derived from `BASIC_USER`/`BASIC_PASS` when unset). No new account system — upload, storage, Telegram/R2, file serving, and public URLs are unchanged.
+- **Shared design foundation** (`/css/app.css`): Material 3 color tokens, typography, spacing, elevation, motion, and reusable controls used by the landing page, sign-in, and dashboard.
 
 July 19, 2026 - Pluggable Storage & Review, New Homepage, Anti-Hotlinking
 

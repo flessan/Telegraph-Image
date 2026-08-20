@@ -76,13 +76,17 @@ async function handleSubmit(event) {
     if (res.ok) {
       const data = await res.json().catch(() => ({}));
       if (data.authEnabled === false) {
-        // Auth disabled — go straight to console.
-        window.location.href = '/admin.html';
+        // Auth disabled — go straight to the canonical dashboard route.
+        window.location.href = '/admin';
         return;
       }
       const params = new URLSearchParams(window.location.search);
-      const next = params.get('next');
-      window.location.href = next && next.startsWith('/') ? next : '/admin.html';
+      const requested = params.get('next');
+      const next = requested && requested.startsWith('/') && !requested.startsWith('//')
+        && requested.indexOf('\\') === -1 && !requested.startsWith('/login')
+        ? requested
+        : '/admin';
+      window.location.href = next === '/admin.html' ? '/admin' : next;
       return;
     }
     if (res.status === 401) {

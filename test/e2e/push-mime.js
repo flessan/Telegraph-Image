@@ -22,6 +22,8 @@ const path = require('path');
 const fs = require('fs');
 
 const BASE = process.env.E2E_BASE_URL || 'http://localhost:8080';
+const USER = process.env.E2E_USER || 'admin';
+const PASS = process.env.E2E_PASS || '123';
 const OUT = process.env.E2E_OUT || path.join(__dirname, 'output-push');
 fs.mkdirSync(OUT, { recursive: true });
 
@@ -29,6 +31,19 @@ const results = [];
 function check(name, passed, detail = '') {
   results.push({ name, passed, detail });
   console.log(`${passed ? 'PASS' : 'FAIL'}  ${name}${detail ? ' — ' + detail : ''}`);
+}
+
+async function openDashboard(page) {
+  await page.goto(BASE + '/admin', { waitUntil: 'networkidle' });
+  await page.waitForTimeout(500);
+  if (await page.locator('#username').count()) {
+    await page.fill('#username', USER);
+    await page.fill('#password', PASS);
+    await page.click('#submit-btn');
+  }
+  await page.waitForURL(/\/admin(?:[?#]|$)/, { timeout: 10000 });
+  await page.locator('#file-stage').waitFor({ state: 'attached', timeout: 10000 });
+  await page.waitForTimeout(700);
 }
 
 function writeFixtures() {
@@ -86,7 +101,7 @@ function writeFixtures() {
     if (open) open.end = Date.now();
   });
 
-  await page.goto(BASE, { waitUntil: 'networkidle' });
+  await openDashboard(page);
   // Make the inter-file gap easy to measure without slowing the run down.
   await page.evaluate(() => {
     const prefs = JSON.parse(localStorage.getItem('ti.prefs') || '{}');

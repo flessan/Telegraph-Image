@@ -11,7 +11,7 @@ export async function onRequest(context) {
     return new Response(null, {
       status: 302,
       headers: {
-        Location: url.origin + '/login.html',
+        Location: url.origin + '/login',
         'Set-Cookie': clearSessionCookie(request),
       },
     });

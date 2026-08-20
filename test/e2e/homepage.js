@@ -1,4 +1,4 @@
-// End-to-end check of the upload homepage against a running dev server.
+// End-to-end check of the landing page and unified dashboard against a running dev server.
 //
 //   npm start                 # terminal 1 (wrangler pages dev on :8080)
 //   npm run test:e2e          # terminal 2
@@ -23,6 +23,8 @@ const path = require('path');
 const fs = require('fs');
 
 const BASE = process.env.E2E_BASE_URL || 'http://localhost:8080';
+const USER = process.env.E2E_USER || 'admin';
+const PASS = process.env.E2E_PASS || '123';
 const OUT = process.env.E2E_OUT || path.join(__dirname, 'output');
 fs.mkdirSync(OUT, { recursive: true });
 const results = [];
@@ -84,6 +86,18 @@ async function collectFileLinks(page) {
   });
 }
 
+async function finishDashboardLogin(page) {
+  await page.waitForTimeout(500);
+  if (await page.locator('#username').count()) {
+    await page.fill('#username', USER);
+    await page.fill('#password', PASS);
+    await page.click('#submit-btn');
+  }
+  await page.waitForURL(/\/admin(?:[?#]|$)/, { timeout: 10000 });
+  await page.locator('#file-stage').waitFor({ state: 'attached', timeout: 10000 });
+  await page.waitForTimeout(700);
+}
+
 async function clickPush(page) {
   const push = page.locator('#push-changes');
   await push.waitFor({ state: 'visible', timeout: 5000 });
@@ -113,18 +127,22 @@ async function clickPush(page) {
   });
   page.on('pageerror', e => consoleErrors.push('pageerror: ' + e.message));
 
-  // --- 1. homepage loads and picks up SITE_NAME from /api/config
+  // --- 1. the canonical root is content-first, then opens the authenticated dashboard
   await page.goto(BASE, { waitUntil: 'networkidle' });
   const title = await page.title();
   const bodyText = await page.textContent('body');
-  check('首页加载', true, `title="${title}"`);
+  check('落地页加载', /Telegraph Storage/.test(title), `title="${title}"`);
+  check('落地页不是上传器', await page.locator('input[type=file]').count() === 0);
   check('SITE_NAME 经 /api/config 生效', bodyText.includes('E2E Test Host') || title.includes('E2E Test Host'),
     `title="${title}"`);
+  check('落地页说明本地审阅和顺序推送', /review|审阅|tinjau/i.test(bodyText) && /sequential|顺序|berurutan/i.test(bodyText));
 
   await page.screenshot({ path: path.join(OUT, 'shot-1-home.png'), fullPage: true });
+  await page.click('a[href="/admin"]');
+  await finishDashboardLogin(page);
 
-  // --- 2. file input exists and accepts multiple files
-  const fileInput = page.locator('input[type=file]').first();
+  // --- 2. dashboard file input exists and accepts multiple files
+  const fileInput = page.locator('#file-input');
   const inputCount = await page.locator('input[type=file]').count();
   const isMultiple = inputCount ? await fileInput.evaluate(el => el.hasAttribute('multiple')) : false;
   check('存在文件选择输入', inputCount > 0);
@@ -276,32 +294,15 @@ async function clickPush(page) {
   check('拖拽上传生效', afterDrop > beforeDrop, `拖拽前 ${beforeDrop} 条 → 拖拽后 ${afterDrop} 条 (drop target: ${dropTarget})`);
   await page.screenshot({ path: path.join(OUT, 'shot-4-dragdrop.png'), fullPage: true });
 
-  // --- 7. admin entry link present (HIDE_ADMIN_ENTRY unset)
-  const adminLink = await page.locator('a[href*="admin"]').count();
-  check('首页显示后台入口', adminLink > 0, `${adminLink} 个链接`);
+  // --- 7. the unified workspace keeps a clear route back to the landing page
+  const homeLink = await page.locator('#home-link[href="/"]').count();
+  check('工作区显示首页入口', homeLink === 1, `${homeLink} 个链接`);
 
-  // --- 8. dashboard loads and lists the uploads
-  const adminCtx = await browser.newContext({ httpCredentials: { username: 'admin', password: '123' } });
-  const admin = await adminCtx.newPage();
-  const adminErrors = [];
-  admin.on('pageerror', e => adminErrors.push(e.message));
-  const adminCdnFailures = [];
-  admin.on('requestfailed', r => { if (!r.url().includes('localhost')) adminCdnFailures.push(r.url()); });
-  const adminResp = await admin.goto(BASE + '/admin', { waitUntil: 'networkidle' });
-  await admin.waitForTimeout(2500);
-  const adminText = await admin.textContent('body');
-  const adminRows = await admin.locator('img[src*="/file/"], [class*=card], tr').count();
-  const adminRendered = adminRows > 0 || /r2-/.test(adminText);
-  const cdnBlocked = !adminRendered && adminCdnFailures.length > 0;
-  if (cdnBlocked) {
-    // admin.html pulls Vue + Element UI from cdn.jsdelivr.net; unreachable CDN
-    // means a blank dashboard, which is worth knowing but is not a code defect.
-    skip('后台页面加载并显示记录', `CDN 不可达（${adminCdnFailures.length} 个外部资源加载失败），此环境无法验证后台 UI`);
-  } else {
-    check('后台页面加载并显示记录', adminRendered,
-      `HTTP ${adminResp && adminResp.status()}, 元素 ${adminRows} 个, JS错误: ${adminErrors.slice(0,2).join('|') || 'none'}`);
-  }
-  await admin.screenshot({ path: path.join(OUT, 'shot-5-admin.png'), fullPage: true });
+  // --- 8. the same dependency-free dashboard lists the uploaded objects
+  const adminRows = await page.locator('.file-card, .list-row[data-id]').count();
+  const adminText = await page.textContent('body');
+  check('统一后台显示上传记录', adminRows >= 2 || /r2-/.test(adminText), `对象元素 ${adminRows} 个`);
+  await page.screenshot({ path: path.join(OUT, 'shot-5-admin.png'), fullPage: true });
 
   // --- 9. no console errors
   check('无 JS 脚本错误', consoleErrors.length === 0, consoleErrors.slice(0, 3).join(' | ') || 'none');

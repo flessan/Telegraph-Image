@@ -13,7 +13,7 @@ const workspaceJs = read('js/workspace.js');
 const adminJs = read('js/admin.js');
 const mimeJs = read('js/mime.js');
 const queueJs = read('js/push-queue.js');
-const indexHtml = read('index.html');
+const adminHtml = read('admin.html');
 const workspaceCss = read('css/workspace.css');
 const appCss = read('css/app.css');
 
@@ -52,13 +52,13 @@ describe('push queue — wiring guards', () => {
 
   it('exposes the queue surface with progress semantics and controls', () => {
     for (const id of ['push-panel', 'push-phase', 'push-progress-text', 'push-bar', 'push-current', 'push-note']) {
-      assert.ok(indexHtml.includes(`id="${id}"`), `missing #${id}`);
+      assert.ok(adminHtml.includes(`id="${id}"`), `missing #${id}`);
     }
     for (const id of ['push-pause', 'push-cancel', 'push-retry-failed', 'push-dismiss']) {
-      assert.ok(indexHtml.includes(`id="${id}"`), `missing control #${id}`);
+      assert.ok(adminHtml.includes(`id="${id}"`), `missing control #${id}`);
     }
-    assert.ok(indexHtml.includes('role="progressbar"'), 'the overall bar is a progressbar');
-    assert.ok(/id="push-note"[^>]*role="status"/.test(indexHtml), 'status text is announced');
+    assert.ok(adminHtml.includes('role="progressbar"'), 'the overall bar is a progressbar');
+    assert.ok(/id="push-note"[^>]*role="status"/.test(adminHtml), 'status text is announced');
   });
 
   it('keeps the surface calm and reduced-motion friendly', () => {

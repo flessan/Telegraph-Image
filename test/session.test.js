@@ -69,6 +69,15 @@ describe('session authentication', function () {
     assert.ok(res.headers.get('Set-Cookie').includes('Secure'));
   });
 
+  it('redirects legacy GET login navigation to the canonical GUI route', async function () {
+    const { onRequest } = await import('../functions/api/manage/login.js');
+    const request = new Request('https://example.com/api/manage/login');
+    const res = await onRequest(makeContext({ request, env }));
+    assert.strictEqual(res.status, 302);
+    assert.strictEqual(res.headers.get('Location'), 'https://example.com/login');
+    assert.strictEqual(res.headers.get('WWW-Authenticate'), null);
+  });
+
   it('rejects invalid login credentials with 401', async function () {
     const { onRequest } = await import('../functions/api/manage/login.js');
     const request = new Request('https://example.com/api/manage/login', {
@@ -102,6 +111,15 @@ describe('session authentication', function () {
     const res = await onRequest(makeContext({ request, env }));
     assert.strictEqual(res.status, 401);
     assert.strictEqual(JSON.parse(await res.text()).authenticated, false);
+  });
+
+  it('clears legacy GET logout and redirects to the canonical GUI login', async function () {
+    const { onRequest } = await import('../functions/api/manage/logout.js');
+    const request = new Request('https://example.com/api/manage/logout');
+    const res = await onRequest(makeContext({ request, env }));
+    assert.strictEqual(res.status, 302);
+    assert.strictEqual(res.headers.get('Location'), 'https://example.com/login');
+    assert.ok(res.headers.get('Set-Cookie').includes('Max-Age=0'));
   });
 
   it('clears the session cookie on POST logout', async function () {

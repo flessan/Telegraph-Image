@@ -1,7 +1,7 @@
 /* =========================================================================
    Telegraph-Image — shared Material 3-inspired design foundation
    Used by both the public workspace (/index.html) and the Remote Storage
-   Console (/admin.html, /login.html). Keep this layer framework-free.
+   Dashboard (/admin) and sign-in (/login). Keep this layer framework-free.
    ========================================================================= */
 
 :root {
@@ -80,8 +80,12 @@
      from this list instead of inventing its own number, so the stacking order
      stays auditable: content < shell chrome < overlays < menus < notifications. */
   --z-content: 1;
+  --z-mobile-search: 5;
+  --z-bottom-nav: 12;
+  --z-fab: 15;
   --z-bulk-bar: 20;
   --z-app-header: 30;
+  --z-drop-overlay: 35;
   --z-nav-scrim: 40;
   --z-nav-drawer: 45;
   --z-sheet-scrim: 50;

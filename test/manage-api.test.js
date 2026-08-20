@@ -236,13 +236,14 @@ describe('manage API authentication middleware', function () {
 
     const res = await authentication(makeContext({
       env: { img_url, BASIC_USER: 'admin', BASIC_PASS: 'secret' },
-      request: new Request('https://example.com/admin.html', {
+      request: new Request('https://example.com/admin?view=albums', {
         headers: { Accept: 'text/html' },
       }),
     }));
 
     assert.strictEqual(res.status, 302);
-    assert.ok(res.headers.get('Location').includes('/login.html'));
+    assert.strictEqual(res.headers.get('Location'), 'https://example.com/login?next=%2Fadmin%3Fview%3Dalbums');
+    assert.strictEqual(res.headers.get('WWW-Authenticate'), null);
   });
 
   it('returns the dashboard disabled message when KV is not bound', async function () {

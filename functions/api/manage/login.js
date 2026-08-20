@@ -33,7 +33,7 @@ export async function onRequest(context) {
   // The GUI posts credentials; browsers hitting the legacy path still get a
   // redirect to the Material login screen.
   if (request.method !== 'POST') {
-    return Response.redirect(url.origin + '/login.html', 302);
+    return Response.redirect(url.origin + '/login', 302);
   }
 
   if (!authConfigured(env)) {
