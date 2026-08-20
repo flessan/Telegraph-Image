@@ -110,12 +110,44 @@ describe('canonical Telegraph Storage surfaces', () => {
       }
       assert.ok(indexHtml.includes('class="motion-rail"'));
       assert.ok((indexHtml.match(/reveal-on-scroll/g) || []).length >= 8);
-      for (const animation of ['packet-a', 'rail-motion', 'hub-breathe', 'route-dash']) {
+      for (const animation of ['packet-a', 'rail-motion', 'hub-breathe', 'route-dash', 'capability-reveal', 'hero-orbit']) {
         assert.ok(landingCss.includes(`@keyframes ${animation}`), `missing ${animation} motion`);
       }
       assert.ok(landingJs.includes("'(prefers-reduced-motion: reduce)'"));
       assert.ok(landingJs.includes("typeof window.IntersectionObserver !== 'function'"));
       assert.ok(!/gsap|anime\.js|framer-motion/i.test(indexHtml + landingJs), 'landing motion stays dependency-free');
+    });
+
+    it('keeps card motion composable and hover effects pointer-aware', () => {
+      const finePointerGate = landingCss.indexOf('@media (hover: hover) and (pointer: fine)');
+      assert.ok(finePointerGate >= 0, 'hover treatments need a fine-pointer gate');
+      assert.doesNotMatch(
+        landingCss.slice(0, finePointerGate),
+        /(^|\n)\s*[^/*@\n][^{\n]*:hover[^{\n]*\{/,
+        'hover selectors must not escape the fine-pointer gate',
+      );
+      assert.ok(landingCss.includes('@media (hover: none), (pointer: coarse)'), 'touch layouts need a coarse-pointer fallback');
+      assert.match(
+        landingCss,
+        /\.motion-ready \.capability-card\.reveal-on-scroll\s*\{[^}]*transform[^}]*border-radius[^}]*background/,
+        'card reveal transitions must retain all interactive properties',
+      );
+      assert.match(
+        landingCss,
+        /\.motion-ready \.capability-card\.reveal-on-scroll\.is-visible\s*\{[^}]*animation: capability-reveal[^}]*--reveal-delay/,
+        'card reveal timing should be isolated from hover transitions',
+      );
+      assert.doesNotMatch(
+        landingCss,
+        /\.motion-ready \.capability-card[^{}]*\{[^}]*transition-delay/,
+        'card hover transitions must not retain reveal delays',
+      );
+      assert.match(
+        landingCss,
+        /\.hero-actions \.landing-primary:hover\s*\{[^}]*color:[^}]*background:/,
+        'the primary hover state must retain its filled inverse-color treatment',
+      );
+      assert.ok(landingCss.includes('@media (max-width: 420px)'), 'compact phones need a dedicated composition pass');
     });
 
     it('keeps hidden components reliably hidden', () => {
