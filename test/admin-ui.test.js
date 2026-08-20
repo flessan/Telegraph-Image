@@ -45,7 +45,7 @@ describe('canonical Telegraph Storage surfaces', () => {
     });
 
     it('links the landing primary action to /admin and identifies the source', () => {
-      assert.ok(/href="\/admin"[^>]*data-i18n="openDashboard"/.test(indexHtml));
+      assert.ok(/class="btn landing-primary" href="\/admin"[^>]*>[\s\S]*?data-i18n="openDashboard"/.test(indexHtml));
       assert.ok(/href="https:\/\/github\.com\/flessan\/Telegraph-Image"/.test(indexHtml));
       for (const key of ['landingStageTitle', 'landingReviewTitle', 'landingPushTitle', 'landingManageTitle']) {
         assert.ok(indexHtml.includes(`data-i18n="${key}"`), `landing is missing ${key}`);
@@ -102,6 +102,20 @@ describe('canonical Telegraph Storage surfaces', () => {
     it('honors reduced motion on landing and dashboard', () => {
       assert.ok(/@media \(prefers-reduced-motion: reduce\)/.test(landingCss));
       assert.ok(/@media \(prefers-reduced-motion: reduce\)/.test(workspaceCss));
+    });
+
+    it('uses progressive, product-led motion without a framework dependency', () => {
+      for (const id of ['landing-header', 'scroll-progress-bar', 'storage-visual']) {
+        assert.ok(indexHtml.includes(`id="${id}"`), `landing motion is missing ${id}`);
+      }
+      assert.ok(indexHtml.includes('class="motion-rail"'));
+      assert.ok((indexHtml.match(/reveal-on-scroll/g) || []).length >= 8);
+      for (const animation of ['packet-a', 'rail-motion', 'hub-breathe', 'route-dash']) {
+        assert.ok(landingCss.includes(`@keyframes ${animation}`), `missing ${animation} motion`);
+      }
+      assert.ok(landingJs.includes("'(prefers-reduced-motion: reduce)'"));
+      assert.ok(landingJs.includes("typeof window.IntersectionObserver !== 'function'"));
+      assert.ok(!/gsap|anime\.js|framer-motion/i.test(indexHtml + landingJs), 'landing motion stays dependency-free');
     });
 
     it('keeps hidden components reliably hidden', () => {

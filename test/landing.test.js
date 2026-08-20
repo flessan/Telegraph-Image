@@ -59,6 +59,16 @@ describe('Telegraph Storage landing page (DOM)', function () {
     assert.strictEqual(ctx.doc.body.style.getPropertyValue('--landing-background-image'), '');
   });
 
+  it('progressively enables motion while keeping reveal content available without IntersectionObserver', async function () {
+    await start();
+    assert.ok(ctx.doc.body.classList.contains('landing-ready'));
+    assert.ok(ctx.doc.body.classList.contains('motion-ready'));
+    const reveals = Array.from(ctx.doc.querySelectorAll('.reveal-on-scroll'));
+    assert.ok(reveals.length >= 8);
+    assert.ok(reveals.every((node) => node.classList.contains('is-visible')));
+    assert.match(ctx.$('scroll-progress-bar').style.transform, /^scaleX\(/);
+  });
+
   it('restores and persists theme through the shared ti.prefs record', async function () {
     await start({ prefs: { theme: 'dark', layout: 'masonry' } });
     assert.strictEqual(ctx.doc.documentElement.dataset.theme, 'dark');
