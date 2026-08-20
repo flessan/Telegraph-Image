@@ -1,8 +1,9 @@
 # Manual QA — sequential Push and MIME-aware output
 
-Run against the live preview (`npm start`, then open the workspace at `/` and the
-console at `/admin.html`). Deterministic behaviour is already covered by
-`npm test`; this list is for the things only a human at a browser can judge.
+Run against the live preview (`npm start`, open the landing page at `/`, sign in
+at `/login`, then open the unified workspace at `/admin`). Deterministic
+behaviour is already covered by `npm test`; this list is for the things only a
+human at a browser can judge.
 
 Tip: the two push intervals are preferences, so a slow batch can be made easy to
 observe. In the browser console:
@@ -65,13 +66,13 @@ an unknown/incorrect extension.
       never a broken image.
 - [ ] A file whose *extension lies* (e.g. an MP3 named `x.png`) previews as
       audio: the MIME type wins locally.
-- [ ] Same checks in the console detail sheet (`/admin.html` → open an object).
-      Remote objects have no stored MIME type, so the extension is used there.
+- [ ] Repeat the checks with remote objects in `/admin`; stored MIME metadata
+      wins when available, with the extension used only as a fallback.
 
 ## 5. MIME-aware links
 
-For each of the files above, copy all four formats (workspace: format tabs +
-`Copy all`; console: object menu → Copy URL/Markdown/BBCode/HTML).
+For each file above, copy all four formats in the unified workspace (format
+selector + `Copy all`, or the object menu → Copy URL/Markdown/BBCode/HTML).
 
 - [ ] **URL** is byte-identical to the public `/file/...` URL for every type.
 - [ ] **HTML**: image → `<img …>`, audio → `<audio controls …>`, video →

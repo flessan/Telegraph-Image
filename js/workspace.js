@@ -54,10 +54,17 @@ function prefInterval(key, fallback, max) {
 const pushDelayMs = () => prefInterval('pushDelayMs', PUSH_DELAY_DEFAULT_MS, 60000);
 const pushRetryBaseMs = () => prefInterval('pushRetryBaseMs', PUSH_RETRY_BASE_DEFAULT_MS, 60000);
 const RECENT_MS = 48 * 60 * 60 * 1000;
+const REMOTE_PAGE_SIZE = 100;
 
 const state = {
   items: [],
   albums: [],
+  remoteCursor: null,
+  remoteComplete: false,
+  remoteLoading: false,
+  remoteError: false,
+  remoteLoaded: 0,
+  session: null,
   albumId: null,          // album currently open in the Albums view (null = root)
   expanded: new Set(),    // expanded nodes of the sidebar album tree
   albumSync: 'unknown',   // unknown | synced | local (remote management unavailable)
@@ -86,6 +93,7 @@ let lastFocus = null;
 let dragState = null;      // { kind: 'objects' | 'album', ids | albumId }
 let moveContext = null;    // state of the "Move to…" dialog
 let albumDialogContext = null;
+let renameTarget = null;
 let pushQueue = null;      // sequential upload queue (js/push-queue.js)
 let queueTicker = null;    // countdown/ETA ticker while a push is running
 let activeUpload = null;   // in-flight XHR, kept so state stays inspectable
@@ -248,6 +256,9 @@ function toRecord(item) {
     height: item.height,
     albumId: item.albumId || null,
     albumSynced: item.albumSynced !== false,
+    remoteId: item.remoteId || null,
+    remote: !!item.remote,
+    remoteMetadata: item.remoteMetadata || null,
     blob: null,
   };
   if (item.status !== 'synced' && item.file) record.blob = item.file;
@@ -460,6 +471,9 @@ function visibleItems() {
     list = list.filter((item) => (item.pushedAt || item.addedAt) >= cutoff);
   }
   if (state.view === 'changes') list = list.filter(isPendingLike);
+  if (state.view === 'whitelist') list = list.filter((item) => item.remote && item.remoteMetadata?.ListType === 'White');
+  if (state.view === 'blacklist') list = list.filter((item) => item.remote && item.remoteMetadata?.ListType === 'Block');
+  if (state.view === 'overview' || state.view === 'tools') list = [];
   if (state.query) list = list.filter((item) => matchesQuery(item, state.query));
 
   const [key, dir] = state.sort.split(':');
@@ -639,6 +653,8 @@ function uploadStagedFile(entry, ctx) {
         item.queue = 'synced';
         item.progress = 100;
         item.src = src;
+        item.remoteId = objectIdOf({ src });
+        item.remote = true;
         item.url = location.origin + src;
         item.pushedAt = Date.now();
         // The object now exists remotely; its album membership (if any) is
@@ -1215,9 +1231,143 @@ async function albumApi(path, options = {}) {
 }
 
 function objectIdOf(item) {
-  if (!item || !item.src) return null;
+  if (!item) return null;
+  if (item.remoteId) return item.remoteId;
+  if (!item.src) return null;
   const match = String(item.src).match(/\/file\/([^/?#]+)/);
-  return match ? match[1] : null;
+  if (!match) return null;
+  try { return decodeURIComponent(match[1]); } catch (_) { return match[1]; }
+}
+
+function storedMime(metadata) {
+  const meta = metadata || {};
+  return meta.mimeType || meta.mimetype || meta.contentType || meta.type || '';
+}
+
+function normalizedRemoteMetadata(metadata, id) {
+  const meta = metadata || {};
+  return {
+    ListType: meta.ListType || 'None',
+    Label: meta.Label || 'None',
+    TimeStamp: Number(meta.TimeStamp) || 0,
+    liked: !!meta.liked,
+    fileName: meta.fileName || id,
+    fileSize: Number(meta.fileSize) || 0,
+    ...meta,
+  };
+}
+
+async function manageApi(path, options = {}) {
+  const res = await fetch(path, {
+    credentials: 'same-origin',
+    redirect: 'manual',
+    headers: {
+      Accept: 'application/json',
+      ...(options.body ? { 'Content-Type': 'application/json' } : {}),
+      ...(options.headers || {}),
+    },
+    ...options,
+  });
+  if (res.type === 'opaqueredirect' || res.status === 401 || res.status === 403
+    || [301, 302, 303, 307, 308].indexOf(res.status) !== -1) {
+    const error = new Error('unauthenticated');
+    error.unauthenticated = true;
+    throw error;
+  }
+  return res;
+}
+
+function redirectToLogin() {
+  try { sessionStorage.setItem('ti.session-expired', '1'); } catch (_) { /* ignore */ }
+  window.location.href = '/login?next=' + encodeURIComponent('/admin');
+}
+
+async function requireSession() {
+  try {
+    const res = await manageApi('/api/manage/session');
+    if (!res.ok) throw new Error('session_failed');
+    const data = await res.json();
+    if (!data.authenticated) return false;
+    state.session = data;
+    return true;
+  } catch (error) {
+    if (error && error.unauthenticated) return false;
+    return false;
+  }
+}
+
+function publicObjectUrl(id, metadata) {
+  const publicId = (metadata && metadata.shortId) || id;
+  return location.origin + '/file/' + encodeURIComponent(publicId);
+}
+
+function mergeRemoteRecords(keys, reset) {
+  if (reset) state.items = state.items.filter((item) => !item.remoteOnly);
+  for (const key of keys || []) {
+    const remoteId = String(key.name || '');
+    if (!remoteId) continue;
+    const metadata = normalizedRemoteMetadata(key.metadata, remoteId);
+    let item = state.items.find((entry) => objectIdOf(entry) === remoteId);
+    if (!item) {
+      item = {
+        id: 'remote:' + remoteId,
+        seq: 0,
+        addedAt: metadata.TimeStamp || 0,
+        pushedAt: metadata.TimeStamp || 0,
+        status: 'synced',
+        src: '/file/' + encodeURIComponent(remoteId),
+        progress: 100,
+        error: null,
+        width: Number(metadata.width) || null,
+        height: Number(metadata.height) || null,
+        albumSynced: true,
+        file: null,
+        previewUrl: null,
+        remoteOnly: true,
+      };
+      state.items.push(item);
+    }
+    item.remote = true;
+    item.remoteId = remoteId;
+    item.remoteMetadata = metadata;
+    item.name = metadata.fileName || remoteId;
+    item.type = storedMime(metadata);
+    item.size = Number(metadata.fileSize) || item.size || 0;
+    item.addedAt = metadata.TimeStamp || item.addedAt || 0;
+    item.pushedAt = metadata.TimeStamp || item.pushedAt || null;
+    item.albumId = metadata.albumId || null;
+    item.url = publicObjectUrl(remoteId, metadata);
+    item._category = null;
+  }
+  state.remoteLoaded = state.items.filter((item) => item.remote).length;
+}
+
+async function loadRemotePage(reset = false) {
+  if (state.remoteLoading || (!reset && state.remoteComplete)) return false;
+  state.remoteLoading = true;
+  state.remoteError = false;
+  renderChrome();
+  try {
+    const params = new URLSearchParams({ limit: String(REMOTE_PAGE_SIZE) });
+    if (!reset && state.remoteCursor) params.set('cursor', state.remoteCursor);
+    const res = await manageApi('/api/manage/list?' + params.toString());
+    if (!res.ok) throw new Error('remote_list_' + res.status);
+    const data = await res.json();
+    mergeRemoteRecords(data.keys || [], reset);
+    state.remoteCursor = data.list_complete ? null : data.cursor;
+    state.remoteComplete = !!data.list_complete;
+    return true;
+  } catch (error) {
+    if (error && error.unauthenticated) {
+      redirectToLogin();
+      return false;
+    }
+    state.remoteError = true;
+    return false;
+  } finally {
+    state.remoteLoading = false;
+    render();
+  }
 }
 
 async function deleteRemoteAlbum(id) {
@@ -1558,7 +1708,11 @@ function renderCrumbs() {
   };
 
   if (state.view !== 'albums') {
-    const key = state.view === 'images' ? 'navImages' : state.view === 'recent' ? 'navRecent' : state.view === 'changes' ? 'navChanges' : 'navFiles';
+    const keys = {
+      overview: 'consoleOverview', files: 'navFiles', images: 'navImages', recent: 'navRecent',
+      changes: 'navChanges', whitelist: 'navWhitelist', blacklist: 'navBlacklist', tools: 'navTools',
+    };
+    const key = keys[state.view] || 'navFiles';
     addCrumb(t('breadcrumbRoot'), { onClick: () => { state.view = 'files'; savePrefs(); render(); } });
     addCrumb(t(key), { current: true });
     return;
@@ -1985,7 +2139,13 @@ function renderChrome() {
 
   $('view-grid').setAttribute('aria-pressed', state.layout === 'grid' ? 'true' : 'false');
   $('view-list').setAttribute('aria-pressed', state.layout === 'list' ? 'true' : 'false');
+  if ($('view-masonry')) $('view-masonry').setAttribute('aria-pressed', state.layout === 'masonry' ? 'true' : 'false');
   $('sort-select').value = state.sort;
+  const moreRow = $('load-more-row');
+  const pageableView = ['files', 'images', 'albums', 'recent', 'whitelist', 'blacklist'].indexOf(state.view) !== -1;
+  if (moreRow) moreRow.hidden = !pageableView || state.remoteComplete || state.remoteError || state.remoteLoading || !state.remoteCursor;
+  const more = $('load-more');
+  if (more) { more.disabled = state.remoteLoading; more.textContent = t(state.remoteLoading ? 'loadingMore' : 'loadMore'); }
 
   updateFooterMeter();
 
@@ -2059,12 +2219,17 @@ function renderBulkBar() {
   bar.hidden = count === 0;
   $('bulk-count').textContent = count ? t('selectedCount', { n: count }) : '';
   const selected = selectedItems();
+  const remote = selected.filter((item) => item.remote && item.remoteId);
   const canPush = state.online && selected.some((item) => (item.status === 'pending' || item.status === 'failed') && item.file);
   const canCopy = selected.some((item) => item.url);
   $('bulk-push').disabled = !canPush;
   $('bulk-copy').disabled = !canCopy;
   const move = $('bulk-move');
   if (move) move.disabled = count === 0;
+  if ($('bulk-whitelist')) $('bulk-whitelist').disabled = remote.length === 0;
+  if ($('bulk-blacklist')) $('bulk-blacklist').disabled = remote.length === 0;
+  if ($('bulk-delete')) $('bulk-delete').disabled = remote.length === 0;
+  if ($('bulk-remove')) $('bulk-remove').disabled = selected.every((item) => item.remoteOnly);
 }
 
 function selectedItems() {
@@ -2141,10 +2306,76 @@ function buildChangeRow(item) {
   return row;
 }
 
+function renderOverview(stage) {
+  const localChanges = state.items.filter(isPendingLike).length;
+  const moderated = state.items.filter((item) => item.remote
+    && ['White', 'Block'].indexOf(item.remoteMetadata?.ListType) !== -1).length;
+  const section = document.createElement('section');
+  section.className = 'management-view';
+  const head = document.createElement('div');
+  head.className = 'management-head';
+  const title = document.createElement('h2');
+  title.textContent = t('overviewTitle');
+  const copy = document.createElement('p');
+  copy.textContent = t('overviewBody');
+  head.append(title, copy);
+  const stats = document.createElement('div');
+  stats.className = 'overview-grid';
+  [
+    [t('overviewLocal'), localChanges],
+    [t('overviewRemote'), state.remoteLoaded],
+    [t('overviewAlbums'), state.albums.length],
+    [t('overviewModerated'), moderated],
+  ].forEach(([label, value]) => {
+    const card = document.createElement('article');
+    const number = document.createElement('strong');
+    number.textContent = String(value);
+    const caption = document.createElement('span');
+    caption.textContent = label;
+    card.append(number, caption);
+    stats.appendChild(card);
+  });
+  const note = document.createElement('p');
+  note.className = 'management-note';
+  note.textContent = state.remoteError ? t('remoteLoadFailed')
+    : state.remoteComplete ? t('listComplete') : t('remoteIndexPartial');
+  section.append(head, stats, note);
+  stage.replaceChildren(section);
+}
+
+function renderTools(stage) {
+  const section = document.createElement('section');
+  section.className = 'management-view';
+  const head = document.createElement('div');
+  head.className = 'management-head';
+  const title = document.createElement('h2');
+  title.textContent = t('toolsTitle');
+  const copy = document.createElement('p');
+  copy.textContent = t('toolsBody');
+  head.append(title, copy);
+  const grid = document.createElement('div');
+  grid.className = 'tools-grid';
+  const tool = (name, body, action, run) => {
+    const card = document.createElement('article');
+    const h = document.createElement('h3'); h.textContent = name;
+    const p = document.createElement('p'); p.textContent = body;
+    const button = document.createElement('button');
+    button.type = 'button'; button.className = 'btn outlined'; button.textContent = action;
+    button.addEventListener('click', run);
+    card.append(h, p, button); grid.appendChild(card);
+  };
+  tool(t('brokenCheck'), t('toolsBrokenBody'), t('brokenCheck'), checkBrokenRemote);
+  tool(t('refreshRemote'), t('toolsRefreshBody'), t('toolsRefresh'), refreshWorkspace);
+  section.append(head, grid);
+  stage.replaceChildren(section);
+}
+
 function renderBrowser() {
   const stage = $('file-stage');
   const items = visibleItems();
 
+  if (state.view === 'overview') { renderOverview(stage); return; }
+  if (state.view === 'tools') { renderTools(stage); return; }
   if (state.view === 'albums') {
     renderAlbumBrowser(stage, items);
     return;
@@ -2271,7 +2502,7 @@ function renderAlbumBrowser(stage, items) {
 
 function renderGrid(stage, items) {
   const grid = document.createElement('div');
-  grid.className = 'file-grid';
+  grid.className = 'file-grid' + (state.layout === 'masonry' ? ' masonry' : '');
   items.forEach((item) => grid.appendChild(buildCard(item)));
   if (stage.classList.contains('album-section')) stage.appendChild(grid);
   else stage.replaceChildren(grid);
@@ -2751,11 +2982,39 @@ function openItemMenu(item, anchor, x, y) {
     add(t('pushChanges'), () => pushItems([item.id]), !state.online || !item.file);
   }
   if (item.status === 'failed') add(t('retry'), () => pushItems([item.id]), !state.online);
+  if (item.remoteId) {
+    const remoteSep = document.createElement('div');
+    remoteSep.className = 'sep';
+    menu.appendChild(remoteSep);
+    add(t('rename'), () => openRemoteRename(item));
+    add(t('whitelist'), () => moderateRemote(item, 'White'));
+    add(t('blacklist'), () => moderateRemote(item, 'Block'));
+    add(t('toggleLike'), () => toggleRemoteLike(item));
+    add(t('deleteObject'), () => askRemoteDelete([item]));
+  }
   const sep = document.createElement('div');
   sep.className = 'sep';
   menu.appendChild(sep);
-  add(t('remove'), () => askRemove(item), item.status === 'pushing');
+  add(t('remove'), () => askRemove(item), item.status === 'pushing' || item.remoteOnly);
   placeMenu(menu, anchor, x, y);
+}
+
+function openEmptyMenu(x, y) {
+  const menu = $('context-menu');
+  menu.replaceChildren();
+  const add = (label, action) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.setAttribute('role', 'menuitem');
+    button.textContent = label;
+    button.addEventListener('click', () => { closeMenus(); action(); });
+    menu.appendChild(button);
+  };
+  add(t('addFiles'), () => $('file-input').click());
+  add(t('newAlbum'), () => openAlbumDialog({ mode: 'create', parentId: currentAlbumId() }));
+  add(t('selectAllVisible'), selectAllVisible);
+  add(t('refresh'), refreshWorkspace);
+  placeMenu(menu, null, x, y);
 }
 
 function askRemove(item) {
@@ -2765,6 +3024,31 @@ function askRemove(item) {
   openOverlayDialog($('confirm-dialog'));
   confirmResolver = (ok) => {
     if (ok) removeItem(item.id);
+  };
+}
+
+function openRemoteRename(item) {
+  if (!item?.remoteId) return;
+  renameTarget = item;
+  const input = $('rename-input');
+  input.value = item.name || '';
+  lastFocus = document.activeElement;
+  openOverlayDialog($('rename-dialog'));
+  input.select();
+}
+
+function askRemoteDelete(items) {
+  const remote = items.filter((item) => item?.remoteId);
+  if (!remote.length) return;
+  $('confirm-title').textContent = t('confirmDeleteTitle');
+  $('confirm-body').textContent = t(remote.length === 1 ? 'confirmDeleteBody' : 'confirmBulkDeleteBody', {
+    name: remote[0].name,
+    n: remote.length,
+  });
+  lastFocus = document.activeElement;
+  openOverlayDialog($('confirm-dialog'));
+  confirmResolver = (ok) => {
+    if (ok) deleteRemoteItems(remote);
   };
 }
 
@@ -2808,7 +3092,7 @@ function openOverlayDialog(dialog) {
 }
 
 function closeDialogs() {
-  ['preview-dialog', 'confirm-dialog', 'command-dialog', 'album-dialog', 'move-dialog'].forEach((id) => {
+  ['preview-dialog', 'confirm-dialog', 'command-dialog', 'album-dialog', 'move-dialog', 'rename-dialog'].forEach((id) => {
     const el = $(id);
     if (!el) return;
     el.classList.remove('open');
@@ -2820,6 +3104,7 @@ function closeDialogs() {
   state.previewZoom = false;
   albumDialogContext = null;
   moveContext = null;
+  renameTarget = null;
   if (confirmResolver) {
     const resolver = confirmResolver;
     confirmResolver = null;
@@ -2910,20 +3195,124 @@ function openOverflowMenu(anchor) {
   lang.textContent = t('language');
   lang.addEventListener('click', () => openLangMenu(anchor));
   menu.appendChild(lang);
-  menu.appendChild(menuLink('/admin.html', t('dashboard')));
-  menu.appendChild(menuLink('https://github.com/cf-pages/Telegraph-Image', t('github'), { target: '_blank', rel: 'noopener' }));
-  const sep = document.createElement('div');
-  sep.className = 'sep';
-  menu.appendChild(sep);
-  menu.appendChild(menuLink('/index-nuxt.html', t('classicUploader')));
+  menu.appendChild(menuLink('/admin', t('dashboard')));
+  menu.appendChild(menuLink('https://github.com/flessan/Telegraph-Image', t('github'), { target: '_blank', rel: 'noopener' }));
   const rect = anchor.getBoundingClientRect();
   placeMenu(menu, null, rect.right - 220, rect.bottom + 4);
 }
 
+async function runRemoteAction(item, endpoint) {
+  if (!item || !item.remoteId) throw new Error('Remote object unavailable');
+  const response = await manageApi(`/api/manage/${endpoint}/${encodeURIComponent(item.remoteId)}`);
+  if (!response.ok) throw new Error(`remote_action_${response.status}`);
+  return response.json();
+}
+
+async function moderateRemote(item, type, { quiet = false } = {}) {
+  try {
+    const endpoint = type === 'White' ? 'white' : 'block';
+    const metadata = await runRemoteAction(item, endpoint);
+    item.remoteMetadata = { ...(item.remoteMetadata || {}), ...(metadata || {}), ListType: type };
+    item.remote = true;
+    if (!item.remoteOnly) await idbPut(item);
+    if (!quiet) showToast(t(type === 'White' ? 'actionWhitelistSuccess' : 'actionBlacklistSuccess'));
+    render();
+    return true;
+  } catch (error) {
+    if (!quiet) showToast(t('actionFailed'));
+    return false;
+  }
+}
+
+async function toggleRemoteLike(item) {
+  try {
+    const result = await runRemoteAction(item, 'toggleLike');
+    item.remoteMetadata = { ...(item.remoteMetadata || {}), liked: !!result.liked };
+    if (!item.remoteOnly) await idbPut(item);
+    showToast(t(result.liked ? 'actionLikeSuccess' : 'actionUnlikeSuccess'));
+    render();
+  } catch (error) {
+    showToast(t('actionFailed'));
+  }
+}
+
+async function renameRemote(item, name) {
+  const clean = String(name || '').trim();
+  if (!clean || !item?.remoteId) return false;
+  try {
+    const response = await manageApi(`/api/manage/editName/${encodeURIComponent(item.remoteId)}?newName=${encodeURIComponent(clean)}`);
+    if (!response.ok) throw new Error(`remote_rename_${response.status}`);
+    const result = await response.json();
+    item.name = result.fileName || clean;
+    item.remoteMetadata = { ...(item.remoteMetadata || {}), fileName: item.name };
+    if (!item.remoteOnly) await idbPut(item);
+    showToast(t('actionRenameSuccess'));
+    render();
+    return true;
+  } catch (error) {
+    showToast(t('actionFailed'));
+    return false;
+  }
+}
+
+async function deleteRemoteItems(items) {
+  let failed = 0;
+  for (const item of items.filter((entry) => entry.remoteId)) {
+    try {
+      await runRemoteAction(item, 'delete');
+      state.items = state.items.filter((entry) => entry.id !== item.id);
+      state.selected.delete(item.id);
+      rememberUrl(item.id, null);
+      await idbDelete(item.id);
+    } catch (error) {
+      failed += 1;
+    }
+  }
+  showToast(t(failed ? 'bulkSomeFailed' : 'actionDeleteSuccess', { failed }));
+  render();
+}
+
+async function bulkModerateRemote(type) {
+  const items = selectedItems().filter((item) => item.remoteId);
+  if (!items.length) return;
+  let failed = 0;
+  for (const item of items) {
+    if (!await moderateRemote(item, type, { quiet: true })) failed += 1;
+  }
+  state.selected.clear();
+  showToast(t(failed ? 'bulkSomeFailed' : 'bulkComplete', { failed, success: items.length - failed, total: items.length }));
+  render();
+}
+
+async function checkBrokenRemote() {
+  const items = state.items.filter((item) => item.remoteId);
+  let broken = 0;
+  state.selected.clear();
+  showToast(t('brokenChecking', { done: 0, total: items.length }));
+  for (let i = 0; i < items.length; i += 1) {
+    const item = items[i];
+    try {
+      const response = await fetch(item.url || publicObjectUrl(item.remoteId), { method: 'HEAD', cache: 'no-cache' });
+      if (!response.ok) { state.selected.add(item.id); broken += 1; }
+    } catch (error) {
+      state.selected.add(item.id);
+      broken += 1;
+    }
+    if ((i + 1) % 10 === 0) showToast(t('brokenChecking', { done: i + 1, total: items.length }));
+  }
+  showToast(t(broken ? 'brokenFound' : 'brokenNone', { n: broken }));
+  render();
+}
+
 async function refreshWorkspace() {
   try {
-    await loadConfig();
-    await loadRemoteAlbums();
+    await Promise.all([loadConfig(), loadRemoteAlbums()]);
+    state.remoteCursor = null;
+    state.remoteComplete = false;
+    state.remoteError = null;
+    state.remoteLoaded = 0;
+    state.items = state.items.filter((item) => !item.remoteOnly);
+    await loadRemotePage(true);
     showToast(t('refreshed'));
   } catch (_) {
     showToast(t('refreshFailed'));
@@ -2938,8 +3327,8 @@ async function loadConfig() {
   state.config = config;
   if (config.siteName) $('site-name').textContent = config.siteName;
   if (config.siteTitle) document.title = config.siteTitle;
-  const admin = $('admin-link');
-  if (admin && config.showAdminEntry === false) admin.remove();
+  // showAdminEntry is a legacy hint for public/custom frontends. This page is
+  // already the dashboard, so it must not hide its unrelated Home action.
   renderSetup(config);
 }
 
@@ -3038,6 +3427,9 @@ function wireEvents() {
   });
   if ($('bulk-download')) $('bulk-download').addEventListener('click', () => selectedItems().forEach(downloadItem));
   if ($('bulk-remove')) $('bulk-remove').addEventListener('click', () => askRemoveMany(Array.from(state.selected)));
+  if ($('bulk-whitelist')) $('bulk-whitelist').addEventListener('click', () => bulkModerateRemote('White'));
+  if ($('bulk-blacklist')) $('bulk-blacklist').addEventListener('click', () => bulkModerateRemote('Block'));
+  if ($('bulk-delete')) $('bulk-delete').addEventListener('click', () => askRemoteDelete(selectedItems()));
   if ($('bulk-clear')) $('bulk-clear').addEventListener('click', clearSelection);
   if ($('preview-prev')) $('preview-prev').addEventListener('click', () => stepPreview(-1));
   if ($('preview-next')) $('preview-next').addEventListener('click', () => stepPreview(1));
@@ -3050,6 +3442,14 @@ function wireEvents() {
     $('command-input').addEventListener('keydown', onCommandKey);
   }
   $('refresh-btn').addEventListener('click', refreshWorkspace);
+  if ($('load-more')) $('load-more').addEventListener('click', () => loadRemotePage());
+  if ($('logout-btn')) $('logout-btn').addEventListener('click', async () => {
+    try {
+      await fetch('/api/manage/logout', { method: 'POST', credentials: 'same-origin', headers: { Accept: 'application/json' } });
+    } finally {
+      window.location.href = '/login';
+    }
+  });
   $('theme-btn').addEventListener('click', () => {
     state.theme = state.theme === 'dark' ? 'light' : 'dark';
     savePrefs();
@@ -3060,18 +3460,51 @@ function wireEvents() {
 
   $('view-grid').addEventListener('click', () => { state.layout = 'grid'; savePrefs(); render(); });
   $('view-list').addEventListener('click', () => { state.layout = 'list'; savePrefs(); render(); });
+  if ($('view-masonry')) $('view-masonry').addEventListener('click', () => { state.layout = 'masonry'; savePrefs(); render(); });
   $('sort-select').addEventListener('change', (event) => {
     state.sort = event.target.value;
     savePrefs();
     render();
   });
 
+  const setDrawer = (open) => {
+    const sidebar = $('workspace-sidebar');
+    const scrim = $('drawer-scrim');
+    if (!sidebar || !scrim) return;
+    sidebar.classList.toggle('drawer-open', open);
+    scrim.hidden = !open;
+    document.body.classList.toggle('drawer-visible', open);
+    $('drawer-toggle')?.setAttribute('aria-expanded', open ? 'true' : 'false');
+  };
+  if ($('drawer-toggle')) $('drawer-toggle').addEventListener('click', () => {
+    setDrawer(!$('workspace-sidebar').classList.contains('drawer-open'));
+  });
+  if ($('drawer-scrim')) $('drawer-scrim').addEventListener('click', () => setDrawer(false));
+
   document.querySelectorAll('[data-view]').forEach((btn) => {
     btn.addEventListener('click', () => {
       state.view = btn.getAttribute('data-view');
       savePrefs();
+      setDrawer(false);
       render();
     });
+  });
+
+  if ($('rename-cancel')) $('rename-cancel').addEventListener('click', closeDialogs);
+  if ($('rename-save')) $('rename-save').addEventListener('click', async () => {
+    const item = renameTarget;
+    const input = $('rename-input');
+    const clean = input.value.trim();
+    $('rename-error').textContent = clean ? '' : t('nameRequired');
+    if (!item || !clean) return;
+    const button = $('rename-save');
+    button.disabled = true;
+    const ok = await renameRemote(item, clean);
+    button.disabled = false;
+    if (ok) closeDialogs();
+  });
+  if ($('rename-input')) $('rename-input').addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') { event.preventDefault(); $('rename-save').click(); }
   });
 
   const search = $('search');
@@ -3126,8 +3559,12 @@ function wireEvents() {
     if (event.key === 'Escape') {
       if (activeMenu) { closeMenus(); return; }
       if (!$('preview-dialog').hidden || !$('confirm-dialog').hidden || !$('command-dialog').hidden
-        || !$('album-dialog').hidden || !$('move-dialog').hidden) {
+        || !$('album-dialog').hidden || !$('move-dialog').hidden || !$('rename-dialog').hidden) {
         closeDialogs();
+        return;
+      }
+      if ($('workspace-sidebar')?.classList.contains('drawer-open')) {
+        setDrawer(false);
         return;
       }
       if (state.selected.size) {
@@ -3175,6 +3612,12 @@ function wireEvents() {
     if (activeMenu && !activeMenu.contains(event.target) && !event.target.closest('#lang-btn, #overflow-btn')) {
       closeMenus();
     }
+  });
+
+  $('browser').addEventListener('contextmenu', (event) => {
+    if (isTyping(event.target) || event.target.closest('pre, code, output, .file-card, .list-row, .album-card, button, a')) return;
+    event.preventDefault();
+    openEmptyMenu(event.clientX, event.clientY);
   });
 
   wireDragAndPaste();
@@ -3413,6 +3856,9 @@ async function restoreLocal() {
       height: record.height || null,
       albumId: record.albumId || null,
       albumSynced: record.albumSynced !== false,
+      remoteId: record.remoteId || null,
+      remote: !!record.remote,
+      remoteMetadata: record.remoteMetadata || null,
       file: record.blob || null,
       previewUrl: null,
     };
@@ -3446,9 +3892,9 @@ function trapFocus(event) {
 async function boot() {
   const prefs = loadPrefs();
   state.theme = detectTheme(prefs);
-  state.layout = prefs.layout === 'list' ? 'list' : 'grid';
+  state.layout = ['grid', 'list', 'masonry'].indexOf(prefs.layout) !== -1 ? prefs.layout : 'grid';
   state.sort = prefs.sort || 'date:desc';
-  state.view = ['files', 'images', 'albums', 'recent', 'changes'].indexOf(prefs.view) !== -1 ? prefs.view : 'files';
+  state.view = ['overview', 'files', 'images', 'albums', 'recent', 'changes', 'whitelist', 'blacklist', 'tools'].indexOf(prefs.view) !== -1 ? prefs.view : 'files';
   state.albumId = typeof prefs.albumId === 'string' ? prefs.albumId : null;
   state.expanded = new Set(Array.isArray(prefs.expanded) ? prefs.expanded : []);
   state.online = navigator.onLine !== false;
@@ -3469,16 +3915,16 @@ async function boot() {
     renderChrome();
   });
 
+  if (!await requireSession()) {
+    redirectToLogin();
+    return;
+  }
+
   await restoreLocal();
   render();
 
-  try { await loadConfig(); render(); }
-  catch (_) { /* defaults already painted */ }
-
-  // Remote album definitions are only visible to an authenticated session; a
-  // public visitor simply keeps the local hierarchy.
-  try { if (await loadRemoteAlbums()) render(); }
-  catch (_) { /* local albums remain authoritative */ }
+  const results = await Promise.allSettled([loadConfig(), loadRemoteAlbums(), loadRemotePage(true)]);
+  if (results[0].status === 'fulfilled' || results[1].status === 'fulfilled') render();
 }
 
 boot();

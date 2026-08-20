@@ -52,7 +52,7 @@ async function errorHandling(context) {
     }
     // Browser navigation to a protected page without a session bounces to the
     // GUI login rather than showing the native credential prompt.
-    return Response.redirect(`${url.origin}/login.html?next=${encodeURIComponent(url.pathname + url.search)}`, 302);
+    return Response.redirect(`${url.origin}/login?next=${encodeURIComponent(url.pathname + url.search)}`, 302);
   }
 
   export const onRequest = [errorHandling, authentication];

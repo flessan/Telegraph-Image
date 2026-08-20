@@ -2,358 +2,276 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 
-// Static guards for the admin console's visual layer. These cover regressions
-// that were only visible in a browser (an unsized SVG that covered the
-// sidebar, a sidebar bound to the 80px rail width, ad-hoc z-index values) and
-// that are cheap to assert against the source.
+// Static guards for the canonical route split and the unified visual layer.
+// Behavioural DOM suites exercise the same admin module; these checks cover
+// responsive structure, accessibility metadata, and accidental entry-point
+// regressions without requiring a browser binary.
 
 const root = path.join(__dirname, '..');
 const read = (rel) => fs.readFileSync(path.join(root, rel), 'utf8');
 
 const appCss = read('css/app.css');
-const adminCss = read('css/admin.css');
+const landingCss = read('css/landing.css');
 const workspaceCss = read('css/workspace.css');
+const indexHtml = read('index.html');
 const adminHtml = read('admin.html');
 const loginHtml = read('login.html');
-const indexHtml = read('index.html');
-const adminJs = read('js/admin.js');
-const i18nJs = read('js/i18n.js');
+const nuxtHtml = read('index-nuxt.html');
+const mdHtml = read('index-md.html');
+const landingJs = read('js/landing.js');
+const workspaceJs = read('js/workspace.js');
+const loginJs = read('js/login.js');
 
-describe('admin console visual layer', () => {
-  describe('shared design foundation', () => {
-    it('defines the brand lockup in the shared layer, not only in workspace.css', () => {
-      // admin.html and login.html load app.css but not workspace.css, so the
-      // brand mark must be sized here or its viewBox-only SVG fills the page.
-      assert.ok(/^\.brand-mark\s*\{/m.test(appCss), 'app.css should define .brand-mark');
-      assert.ok(/\.brand-mark svg\s*\{[^}]*width:\s*\d+px/.test(appCss), '.brand-mark svg needs an explicit width');
-      assert.ok(/\.brand-mark svg\s*\{[^}]*height:\s*\d+px/.test(appCss), '.brand-mark svg needs an explicit height');
+function rule(css, selector) {
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const found = css.match(new RegExp(`(^|\\n)${escaped}\\s*\\{[^}]*\\}`));
+  assert.ok(found, `expected a rule for ${selector}`);
+  return found[0];
+}
+
+function canonical(html) {
+  return (html.match(/<link rel="canonical" href="([^"]+)"/) || [])[1];
+}
+
+describe('canonical Telegraph Storage surfaces', () => {
+  describe('route roles', () => {
+    it('keeps / as a content-first landing page rather than an uploader', () => {
+      assert.strictEqual(canonical(indexHtml), '/');
+      assert.ok(indexHtml.includes('/css/landing.css'));
+      assert.ok(indexHtml.includes('/js/landing.js'));
+      assert.ok(!indexHtml.includes('id="file-input"'), 'landing must not stage files');
+      assert.ok(!indexHtml.includes('/js/workspace.js'), 'landing must not boot the dashboard');
+      assert.ok(!/drag.{0,20}drop|upload queue/i.test(indexHtml), 'landing is not disguised as an upload surface');
     });
 
-    it('keeps the brand primitives available to every page that renders them', () => {
-      for (const [name, html] of [['admin.html', adminHtml], ['login.html', loginHtml]]) {
-        if (!html.includes('brand-mark')) continue;
-        assert.ok(html.includes('/css/app.css'), `${name} must load the shared foundation`);
+    it('links the landing primary action to /admin and identifies the source', () => {
+      assert.ok(/class="btn landing-primary" href="\/admin"[^>]*>[\s\S]*?data-i18n="openDashboard"/.test(indexHtml));
+      assert.ok(/href="https:\/\/github\.com\/flessan\/Telegraph-Image"/.test(indexHtml));
+      for (const key of ['landingStageTitle', 'landingReviewTitle', 'landingPushTitle', 'landingManageTitle']) {
+        assert.ok(indexHtml.includes(`data-i18n="${key}"`), `landing is missing ${key}`);
       }
-      // The public workspace still loads its own layer on top of the shared one.
-      assert.ok(indexHtml.includes('/css/app.css'), 'index.html must load app.css');
-      assert.ok(indexHtml.includes('/css/workspace.css'), 'index.html must load workspace.css');
     });
 
-    it('makes the hidden attribute win over component display rules', () => {
-      // .login-error/.spinner set display:flex/inline-block, which previously
-      // defeated `hidden` and left an empty error banner on the login page.
-      assert.ok(/\[hidden\]\s*\{\s*display:\s*none\s*!important/.test(appCss),
-        'app.css needs a global [hidden] guard');
+    it('keeps /login focused on GUI authentication', () => {
+      assert.strictEqual(canonical(loginHtml), '/login');
+      assert.ok(loginHtml.includes('id="username"'));
+      assert.ok(loginHtml.includes('id="password"'));
+      assert.ok(loginHtml.includes('/js/login.js'));
+      assert.ok(!loginHtml.includes('id="file-input"'));
+      assert.ok(loginJs.includes(": '/admin'"), 'successful login defaults to the dashboard');
+      assert.ok(loginJs.includes("fetch('/api/manage/login'"), 'credentials use the existing session endpoint');
     });
 
-    it('sizes menu glyphs explicitly', () => {
-      assert.ok(/\.menu button svg[^{]*\{[^}]*width:\s*20px/.test(appCss),
-        'menu icons must be constrained');
+    it('makes /admin the one complete storage workspace', () => {
+      assert.strictEqual(canonical(adminHtml), '/admin');
+      assert.ok(adminHtml.includes('/css/workspace.css'));
+      assert.ok(adminHtml.includes('/js/workspace.js'));
+      assert.ok(!adminHtml.includes('/js/admin.js'), 'the obsolete remote-only controller must not also boot');
+      for (const view of ['overview', 'files', 'images', 'albums', 'recent', 'changes', 'whitelist', 'blacklist', 'tools']) {
+        assert.ok(adminHtml.includes(`data-view="${view}"`), `admin is missing ${view}`);
+      }
+    });
+
+    it('keeps compatibility pages noindex and loop-free', () => {
+      for (const [name, html] of [['index-nuxt.html', nuxtHtml], ['index-md.html', mdHtml]]) {
+        assert.ok(/name="robots" content="noindex/.test(html), `${name} must be noindex`);
+        assert.ok(html.includes('location.replace(target)'), `${name} must bridge to /admin`);
+        assert.ok(!html.includes('/index-nuxt.html') && !html.includes('/index-md.html'), `${name} must not redirect in a loop`);
+      }
     });
   });
 
-  describe('layering', () => {
-    it('declares a single ordered stacking scale', () => {
-      const tokens = ['--z-app-header', '--z-nav-drawer', '--z-sheet', '--z-dialog', '--z-menu', '--z-palette', '--z-snackbar'];
-      for (const token of tokens) {
-        assert.ok(appCss.includes(token + ':'), `app.css should define ${token}`);
+  describe('shared design and preferences', () => {
+    it('loads the shared design foundation on every canonical page', () => {
+      for (const [name, html] of [['index.html', indexHtml], ['login.html', loginHtml], ['admin.html', adminHtml]]) {
+        assert.ok(html.includes('/css/app.css'), `${name} must load app.css`);
+      }
+      assert.ok(/^\.brand-mark\s*\{/m.test(appCss));
+      assert.ok(/\.brand-mark svg\s*\{[^}]*width:/.test(appCss), 'brand SVGs need bounded dimensions');
+    });
+
+    it('uses one persisted language and theme preference system', () => {
+      assert.ok(landingJs.includes("from './i18n.js'"));
+      assert.ok(workspaceJs.includes("from './i18n.js'"));
+      assert.ok(loginJs.includes("from './i18n.js'"));
+      for (const source of [landingJs, workspaceJs, loginJs]) {
+        assert.ok(source.includes("ti.prefs"), 'all surfaces must share ti.prefs');
       }
     });
 
-    it('orders overlays above the application shell', () => {
-      const valueOf = (token) => {
-        const m = appCss.match(new RegExp(`${token}:\\s*(\\d+)`));
-        assert.ok(m, `${token} must have a numeric value`);
-        return Number(m[1]);
-      };
-      const header = valueOf('--z-app-header');
-      const drawer = valueOf('--z-nav-drawer');
-      const sheet = valueOf('--z-sheet');
-      const dialog = valueOf('--z-dialog');
-      const menu = valueOf('--z-menu');
-      const palette = valueOf('--z-palette');
-      const snackbar = valueOf('--z-snackbar');
-      assert.ok(header < drawer, 'the drawer must sit above the header');
-      assert.ok(drawer < sheet, 'sheets must sit above the drawer');
-      assert.ok(sheet < dialog, 'dialogs must sit above sheets');
-      assert.ok(dialog < menu, 'menus must sit above dialogs');
-      assert.ok(menu < palette, 'the palette must sit above menus');
-      assert.ok(palette < snackbar, 'notifications sit on top');
+    it('honors reduced motion on landing and dashboard', () => {
+      assert.ok(/@media \(prefers-reduced-motion: reduce\)/.test(landingCss));
+      assert.ok(/@media \(prefers-reduced-motion: reduce\)/.test(workspaceCss));
     });
 
-    it('does not scatter arbitrary z-index values through the stylesheets', () => {
-      for (const [name, css] of [['app.css', appCss], ['admin.css', adminCss]]) {
-        const values = [...css.matchAll(/z-index:\s*(-?\d+)/g)].map(m => Number(m[1]));
-        for (const value of values) {
-          assert.ok(value <= 3, `${name} should use layering tokens, found raw z-index: ${value}`);
+    it('uses progressive, product-led motion without a framework dependency', () => {
+      for (const id of ['landing-header', 'scroll-progress-bar', 'storage-visual']) {
+        assert.ok(indexHtml.includes(`id="${id}"`), `landing motion is missing ${id}`);
+      }
+      assert.ok(indexHtml.includes('class="motion-rail"'));
+      assert.ok((indexHtml.match(/reveal-on-scroll/g) || []).length >= 8);
+      for (const animation of ['packet-a', 'rail-motion', 'hub-breathe', 'route-dash', 'capability-reveal', 'hero-orbit']) {
+        assert.ok(landingCss.includes(`@keyframes ${animation}`), `missing ${animation} motion`);
+      }
+      assert.ok(landingJs.includes("'(prefers-reduced-motion: reduce)'"));
+      assert.ok(landingJs.includes("typeof window.IntersectionObserver !== 'function'"));
+      assert.ok(!/gsap|anime\.js|framer-motion/i.test(indexHtml + landingJs), 'landing motion stays dependency-free');
+    });
+
+    it('keeps card motion composable and hover effects pointer-aware', () => {
+      const finePointerGate = landingCss.indexOf('@media (hover: hover) and (pointer: fine)');
+      assert.ok(finePointerGate >= 0, 'hover treatments need a fine-pointer gate');
+      assert.doesNotMatch(
+        landingCss.slice(0, finePointerGate),
+        /(^|\n)\s*[^/*@\n][^{\n]*:hover[^{\n]*\{/,
+        'hover selectors must not escape the fine-pointer gate',
+      );
+      assert.ok(landingCss.includes('@media (hover: none), (pointer: coarse)'), 'touch layouts need a coarse-pointer fallback');
+      assert.match(
+        landingCss,
+        /\.motion-ready \.capability-card\.reveal-on-scroll\s*\{[^}]*transform[^}]*border-radius[^}]*background/,
+        'card reveal transitions must retain all interactive properties',
+      );
+      assert.match(
+        landingCss,
+        /\.motion-ready \.capability-card\.reveal-on-scroll\.is-visible\s*\{[^}]*animation: capability-reveal[^}]*--reveal-delay/,
+        'card reveal timing should be isolated from hover transitions',
+      );
+      assert.doesNotMatch(
+        landingCss,
+        /\.motion-ready \.capability-card[^{}]*\{[^}]*transition-delay/,
+        'card hover transitions must not retain reveal delays',
+      );
+      assert.match(
+        landingCss,
+        /\.hero-actions \.landing-primary:hover\s*\{[^}]*color:[^}]*background:/,
+        'the primary hover state must retain its filled inverse-color treatment',
+      );
+      assert.ok(landingCss.includes('@media (max-width: 420px)'), 'compact phones need a dedicated composition pass');
+    });
+
+    it('keeps hidden components reliably hidden', () => {
+      assert.ok(/\[hidden\]\s*\{\s*display:\s*none\s*!important/.test(appCss));
+    });
+
+    it('uses one ordered overlay scale instead of arbitrary high z-indexes', () => {
+      const tokens = ['--z-app-header', '--z-nav-drawer', '--z-sheet', '--z-dialog', '--z-menu', '--z-palette', '--z-snackbar'];
+      const values = tokens.map((token) => {
+        const match = appCss.match(new RegExp(`${token}:\\s*(\\d+)`));
+        assert.ok(match, `missing ${token}`);
+        return Number(match[1]);
+      });
+      assert.deepStrictEqual(values, [...values].sort((a, b) => a - b));
+      for (const css of [appCss, landingCss, workspaceCss]) {
+        for (const [, raw] of css.matchAll(/z-index:\s*(-?\d+)/g)) {
+          assert.ok(Number(raw) <= 3, `raw z-index ${raw} should use a token`);
         }
       }
     });
   });
 
-  describe('shell layout', () => {
-    it('gives the sidebar a deliberate readable width, not the icon rail width', () => {
-      const m = adminCss.match(/--console-sidebar-w:\s*(\d+)px/);
-      assert.ok(m, 'admin.css must define --console-sidebar-w');
-      const width = Number(m[1]);
-      assert.ok(width >= 220 && width <= 250, `sidebar width should be 220-250px, got ${width}px`);
-      assert.ok(!/grid-template-columns:\s*var\(--rail-w/.test(adminCss),
-        'the console grid must not be sized from the icon rail token');
+  describe('responsive and accessible admin shell', () => {
+    it('provides a labelled responsive drawer and scrim', () => {
+      assert.ok(adminHtml.includes('id="drawer-toggle"'));
+      assert.ok(adminHtml.includes('aria-controls="workspace-sidebar"'));
+      assert.ok(adminHtml.includes('id="drawer-scrim"'));
+      assert.ok(adminHtml.includes('id="workspace-sidebar"'));
+      assert.ok(/@media \(max-width: 820px\)[\s\S]*\.sidebar/.test(workspaceCss));
+      assert.ok(workspaceJs.includes("classList.toggle('drawer-open'"));
     });
 
-    it('builds the shell from grid tracks rather than absolute positioning', () => {
-      const shell = adminCss.match(/\.console\s*\{[^}]*\}/)[0];
-      assert.ok(shell.includes('display: grid'), 'the shell must be a grid');
-      assert.ok(shell.includes('grid-template-areas'), 'the shell must name its regions');
-      const nav = adminCss.match(/\.console-nav\s*\{[^}]*\}/)[0];
-      assert.ok(nav.includes('grid-area: nav'), 'the sidebar must occupy a grid track');
-      assert.ok(!/position:\s*(absolute|fixed)/.test(nav),
-        'the desktop sidebar must not be positioned out of flow');
+    it('provides desktop and touch navigation to core views', () => {
+      assert.ok(/class="side-nav"/.test(adminHtml));
+      assert.ok(/class="bottom-nav"/.test(adminHtml));
+      for (const view of ['files', 'albums', 'recent', 'changes']) {
+        const matches = adminHtml.match(new RegExp(`data-view="${view}"`, 'g')) || [];
+        assert.ok(matches.length >= 2, `${view} needs sidebar and bottom-nav access`);
+      }
     });
 
-    it('constrains main content and keeps a shared page gutter', () => {
-      assert.ok(/--console-content-max:/.test(adminCss), 'content needs a max width');
-      assert.ok(/--console-gutter:/.test(adminCss), 'pages need a shared gutter token');
-      const page = adminCss.match(/^\.page\s*\{[^}]*\}/m)[0];
-      assert.ok(page.includes('max-width: var(--console-content-max)'));
-      assert.ok(page.includes('margin: 0 auto'));
+    it('has skip, live-region, dialog, and keyboard affordances', () => {
+      assert.ok(/class="skip-link" href="#browser"/.test(adminHtml));
+      assert.ok(adminHtml.includes('id="live"'));
+      assert.ok(adminHtml.includes('aria-live="polite"'));
+      for (const id of ['preview-dialog', 'confirm-dialog', 'album-dialog', 'move-dialog', 'command-dialog']) {
+        assert.ok(new RegExp(`id="${id}"[^>]*role="dialog"[^>]*aria-modal="true"`).test(adminHtml), `${id} must be modal`);
+      }
+      assert.ok(workspaceJs.includes("event.key === 'Escape'"));
+      assert.ok(workspaceJs.includes("event.key !== 'Tab'"), 'open dialogs trap focus');
     });
 
-    it('turns the sidebar into a drawer below the desktop breakpoint', () => {
-      assert.ok(/@media \(max-width: 1023\.98px\)/.test(adminCss),
-        'a tablet/mobile breakpoint must exist');
-      assert.ok(/\.nav-scrim/.test(adminCss), 'the drawer needs its own scrim');
-      assert.ok(adminHtml.includes('id="nav-toggle"'), 'a drawer toggle must exist');
-      assert.ok(adminHtml.includes('id="nav-close"'), 'the drawer must be closable');
-      assert.ok(adminHtml.includes('aria-controls="side-nav"'), 'the toggle must be wired for a11y');
-    });
-
-    it('does not shrink navigation typography to make labels fit', () => {
-      const navItem = adminCss.match(/^\.nav-item\s*\{[^}]*\}/m)[0];
-      assert.ok(navItem.includes('font: var(--type-label-lg)'),
-        'nav items should keep the normal label size');
-      const label = adminCss.match(/\.nav-item \.nav-label\s*\{[^}]*\}/)[0];
-      assert.ok(/overflow-wrap:\s*anywhere/.test(label),
-        'long labels must wrap instead of being clipped');
+    it('exposes grid, list, and masonry layouts with selected state', () => {
+      for (const id of ['view-grid', 'view-list', 'view-masonry']) assert.ok(adminHtml.includes(`id="${id}"`));
+      assert.ok(workspaceCss.includes('.file-grid.masonry'));
+      assert.ok(workspaceJs.includes("setAttribute('aria-pressed'"));
     });
   });
 
-  describe('overview', () => {
-    it('renders statistics as flow content inside their own card', () => {
-      assert.ok(adminJs.includes('class="stat-card"'));
-      assert.ok(adminJs.includes('class="stat-value"'));
-      assert.ok(adminJs.includes('class="stat-label"'));
-      assert.ok(adminJs.includes('class="stat-hint"'));
-      const card = adminCss.match(/^\.stat-card\s*\{[^}]*\}/m)[0];
-      assert.ok(!/position:\s*absolute/.test(card), 'stat cards must stay in flow');
-      assert.ok(card.includes('display: flex'), 'stat cards should lay out their own children');
-      const grid = adminCss.match(/^\.stat-grid\s*\{[^}]*\}/m)[0];
-      assert.ok(grid.includes('align-items: stretch'), 'stat cards must share one height');
+  describe('menus, previews, and management controls', () => {
+    it('keeps object and Album actions reachable without right-click', () => {
+      assert.ok(workspaceJs.includes('openItemMenu(item, event.currentTarget)'));
+      assert.ok(workspaceJs.includes('openAlbumMenu(album, event.currentTarget)'));
+      assert.ok(adminHtml.includes('id="context-menu"'));
+      assert.ok(workspaceJs.includes("t('moveToAlbum')"));
+      assert.ok(workspaceJs.includes("t('deleteObject')"));
     });
 
-    it('separates the page heading from the statistics region', () => {
-      // The heading and the stat grid are siblings inside .page, which is a
-      // flex column with a gap — they cannot overlap.
-      const page = adminCss.match(/^\.page\s*\{[^}]*\}/m)[0];
-      assert.ok(page.includes('flex-direction: column'));
-      assert.ok(/gap:\s*var\(--console-section-gap\)/.test(page));
-      assert.ok(/<header class="page-head">[\s\S]*<section class="stat-grid"/.test(adminJs),
-        'the heading and stats must be separate regions');
+    it('preserves native context menus in typing and code/output surfaces', () => {
+      assert.ok(workspaceJs.includes('function isTyping('));
+      assert.ok(workspaceJs.includes("closest('pre, code, output"));
+      assert.ok(workspaceJs.includes("tag === 'input' || tag === 'textarea'"));
     });
 
-    it('does not invent statistics beyond the truthful counts', () => {
-      const metrics = ['statObjects', 'statImages', 'statOthers', 'statWhitelisted', 'statBlacklisted'];
-      for (const key of metrics) assert.ok(adminJs.includes(key), `${key} should be rendered`);
-      assert.ok(!/<canvas|chart/i.test(adminJs), 'no decorative charts');
+    it('provides an actionable empty-space menu', () => {
+      const start = workspaceJs.indexOf('function openEmptyMenu(');
+      const body = workspaceJs.slice(start, workspaceJs.indexOf('\n}', start) + 2);
+      for (const key of ['addFiles', 'newAlbum', 'selectAllVisible', 'refresh']) {
+        assert.ok(body.includes(`t('${key}')`), `empty menu needs ${key}`);
+      }
+    });
+
+    it('chooses immersive preview elements from MIME-aware kinds', () => {
+      assert.ok(adminHtml.includes('id="preview-prev"'));
+      assert.ok(adminHtml.includes('id="preview-next"'));
+      assert.ok(adminHtml.includes('id="preview-stage"'));
+      for (const kind of ['image', 'audio', 'video', 'pdf']) {
+        assert.ok(workspaceJs.includes(`kind === '${kind}'`), `preview is missing ${kind}`);
+      }
+      assert.ok(workspaceJs.includes('previewKind({ mime: item.type, name: item.name })'));
+      assert.ok(workspaceJs.includes('function stepPreview('));
+    });
+
+    it('keeps remote management and bulk operations in the unified page', () => {
+      for (const id of ['bulk-move', 'bulk-copy', 'bulk-download', 'bulk-whitelist', 'bulk-blacklist', 'bulk-delete']) {
+        assert.ok(adminHtml.includes(`id="${id}"`), `missing ${id}`);
+      }
+      for (const action of ["'white'", "'block'", "'toggleLike'", "'delete'", '/api/manage/editName/']) {
+        assert.ok(workspaceJs.includes(action), `workspace must retain remote action ${action}`);
+      }
+    });
+
+    it('keeps sequential Push controls explicit', () => {
+      for (const id of ['push-changes', 'push-pause', 'push-cancel', 'push-retry-failed', 'push-bar']) {
+        assert.ok(adminHtml.includes(`id="${id}"`), `missing ${id}`);
+      }
+      assert.ok(workspaceJs.includes('createPushQueue({'));
     });
   });
 
-  describe('object browser', () => {
-    it('gives each view mode its own layout rules', () => {
-      for (const selector of ['.obj-grid', '.obj-list', '.obj-waterfall']) {
-        assert.ok(adminCss.includes(selector + ' {'), `${selector} needs explicit rules`);
+  describe('landing deployment customization', () => {
+    it('uses the existing public config fields with resilient defaults', () => {
+      assert.ok(landingJs.includes("fetch('/api/config'"));
+      for (const field of ['siteName', 'siteTitle', 'backgroundImage']) {
+        assert.ok(landingJs.includes(field), `landing must support ${field}`);
       }
+      assert.ok(/catch\s*\([^)]*\)\s*\{/.test(landingJs), 'config failure must be tolerated');
     });
 
-    it('aligns list header and body on one column template', () => {
-      const row = adminCss.match(/^\.obj-row\s*\{[^}]*\}/m)[0];
-      assert.ok(row.includes('display: grid'));
-      assert.ok(row.includes('grid-template-columns'));
-      // The head row reuses .obj-row, so the columns cannot drift apart.
-      assert.ok(adminJs.includes('class="obj-row head"'));
-    });
-
-    it('keeps filenames from overflowing or colliding with controls', () => {
-      const name = adminCss.match(/^\.obj-name\s*\{[^}]*\}/m)[0];
-      assert.ok(name.includes('text-overflow: ellipsis'));
-      assert.ok(name.includes('overflow: hidden'));
-      const meta = adminCss.match(/^\.obj-meta\s*\{[^}]*\}/m)[0];
-      assert.ok(meta.includes('display: grid'), 'metadata and actions need separate tracks');
-      assert.ok(meta.includes('minmax(0, 1fr) auto'));
-    });
-
-    it('gives masonry tiles a static caption instead of an overlay', () => {
-      assert.ok(adminJs.includes('class="wf-caption"'), 'masonry tiles need a caption row');
-      assert.ok(!adminJs.includes('wf-overlay'), 'the hover overlay should be gone');
-      const caption = adminCss.match(/^\.wf-caption\s*\{[^}]*\}/m)[0];
-      assert.ok(caption.includes('display: grid'));
-    });
-
-    it('keeps selection controls reachable on touch devices', () => {
-      assert.ok(/@media \(hover: none\)\s*\{[^}]*\.card-select\s*\{\s*opacity:\s*1/.test(adminCss),
-        'checkboxes must be visible where hover does not exist');
-    });
-
-    it('marks the active view mode', () => {
-      assert.ok(adminJs.includes('aria-pressed="${state.layout === \'grid\'}"'));
-      assert.ok(/\.segmented button\[aria-pressed="true"\]/.test(appCss),
-        'the active segment needs a selected style');
-    });
-  });
-
-  describe('states', () => {
-    it('keeps skeletons dimensionally close to the real cards', () => {
-      assert.ok(adminJs.includes('skeleton-media'), 'skeletons should mirror the media box');
-      const media = adminCss.match(/\.skeleton-media\s*\{[^}]*\}/)[0];
-      const thumb = adminCss.match(/^\.obj-thumb\s*\{[^}]*\}/m)[0];
-      const ratio = /aspect-ratio:\s*([^;]+);/.exec(media)[1].trim();
-      const thumbRatio = /aspect-ratio:\s*([^;]+);/.exec(thumb)[1].trim();
-      assert.strictEqual(ratio, thumbRatio, 'skeleton and card media must share an aspect ratio');
-    });
-
-    it('reserves room for the load-more control so the page does not jump', () => {
-      const row = adminCss.match(/\.load-more-row\s*\{[^}]*\}/)[0];
-      assert.ok(/min-height/.test(row), 'the load-more row needs a stable height');
-    });
-
-    it('keeps empty and error states in normal flow', () => {
-      const surface = adminCss.match(/\.state-surface\s*\{[^}]*\}/)[0];
-      assert.ok(!/position:\s*(absolute|fixed)/.test(surface));
-      assert.ok(/min-height/.test(surface), 'states need a stable minimum height');
-    });
-  });
-
-  describe('overlays and dialogs', () => {
-    it('keeps dialogs inside the viewport', () => {
-      const dialog = appCss.match(/^\.dialog\s*\{[^}]*\}/m)[0];
-      assert.ok(/max-height/.test(dialog));
-      assert.ok(/width:\s*min\(/.test(dialog), 'dialog width must be viewport-aware');
-    });
-
-    it('makes sheets full-width on small screens', () => {
-      assert.ok(/@media \(max-width: 600px\)[\s\S]*?\.sheet\s*\{\s*width:\s*100vw/.test(appCss));
-    });
-
-    it('wraps long metadata and URLs safely', () => {
-      const dd = adminCss.match(/\.detail-dl dd\s*\{[^}]*\}/)[0];
-      assert.ok(dd.includes('overflow-wrap: anywhere'));
-      const raw = adminCss.match(/\.detail-raw\s*\{[^}]*\}/)[0];
-      assert.ok(raw.includes('overflow-wrap: anywhere'));
-      assert.ok(raw.includes('white-space: pre-wrap'));
-    });
-
-    it('positions menus from measured geometry rather than a guessed height', () => {
-      assert.ok(adminJs.includes('menu.offsetHeight'), 'menu placement must measure the menu');
-      assert.ok(!adminJs.includes('top + 300 > window.innerHeight'), 'the hardcoded guess should be gone');
-    });
-  });
-
-  describe('behaviour preserved', () => {
-    it('still exposes every management action', () => {
-      const required = [
-        'copyUrl', 'copyMarkdown', 'copyBbcode', 'copyHtml', 'download', 'rename',
-        'whitelist', 'blacklist', 'deleteObject', 'toggleLike',
-      ];
-      for (const key of required) {
-        assert.ok(adminJs.includes(`t('${key}')`), `${key} must still be offered`);
-      }
-    });
-
-    it('defines every function the command palette references', () => {
-      // bulkDelete was referenced by the palette and the bulk bar but never
-      // defined, which threw while building the command list.
-      const referenced = ['bulkCopy', 'bulkDelete', 'bulkModerate', 'bulkDownload', 'checkBroken', 'logout'];
-      for (const name of referenced) {
-        const defined = new RegExp(`(async )?function ${name}\\b|const ${name}\\s*=`).test(adminJs);
-        assert.ok(defined, `${name} is referenced but never defined`);
-      }
-    });
-
-    it('binds the detail sheet template to a defined object', () => {
-      const body = adminJs.slice(adminJs.indexOf('function openDetail('), adminJs.indexOf('function closeDetail('));
-      assert.ok(/const o = state\.objects\.find/.test(body),
-        'openDetail must bind the object the template reads');
-    });
-  });
-
-  describe('localization', () => {
-    const keysFor = (lang) => {
-      const start = i18nJs.indexOf(`  ${lang}: {`);
-      assert.ok(start > -1, `${lang} block must exist`);
-      const rest = i18nJs.slice(start);
-      const end = rest.indexOf('\n  },');
-      return new Set([...rest.slice(0, end).matchAll(/^\s{4}([A-Za-z0-9_]+):/gm)].map(m => m[1]));
-    };
-
-    it('translates every admin string into both languages', () => {
-      const en = keysFor('en');
-      const id = keysFor('id');
-      const missing = [...en].filter(k => !id.has(k));
-      assert.deepStrictEqual(missing, [], `Indonesian is missing: ${missing.join(', ')}`);
-    });
-
-    it('provides the keys the redesigned shell renders', () => {
-      const en = keysFor('en');
-      const id = keysFor('id');
-      for (const key of ['navSectionLibrary', 'closeNav', 'viewModeGroup', 'detailShare', 'detailProperties',
-        'subtitleAllFiles', 'subtitleImages', 'subtitleWhitelist', 'subtitleBlacklist']) {
-        assert.ok(en.has(key), `en is missing ${key}`);
-        assert.ok(id.has(key), `id is missing ${key}`);
-      }
-    });
-
-    it('keeps the admin surfaces free of Chinese strings', () => {
-      const cjk = /[\u4e00-\u9fff\u3000-\u303f\uff00-\uffef]/;
-      for (const [name, source] of [
-        ['admin.html', adminHtml], ['login.html', loginHtml],
-        ['js/admin.js', adminJs], ['js/i18n.js', i18nJs],
-        ['css/admin.css', adminCss], ['css/app.css', appCss],
-      ]) {
-        assert.ok(!cjk.test(source), `${name} should not contain Chinese text`);
-      }
-    });
-
-    it('does not hard-code widths that only fit English labels', () => {
-      // Text-bearing blocks must be sized by content/tokens, never by a pixel
-      // width tuned to short English strings. Fixed-size icon boxes are fine.
-      const textBlocks = ['.nav-item .nav-label', '.nav-item .nav-count', '.stat-card', '.stat-card .stat-label', '.page-head h1'];
-      for (const selector of textBlocks) {
-        const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const rule = adminCss.match(new RegExp(`^${escaped}\\s*\\{[^}]*\\}`, 'm'));
-        if (!rule) continue;
-        assert.ok(!/(?<!max-|min-)width:\s*\d+px/.test(rule[0]),
-          `${selector} must not use a fixed pixel width`);
-      }
-      // The sidebar itself is a single token, so translations resize one value.
-      const shell = adminCss.match(/\.console\s*\{[^}]*\}/)[0];
-      assert.ok(shell.includes('var(--console-sidebar-w)'),
-        'the sidebar track must come from a token');
-    });
-  });
-
-  describe('public workspace is not regressed', () => {
-    it('leaves the workspace shell tokens in place', () => {
-      for (const token of ['--sidebar-w', '--rail-w', '--header-h', '--status-h', '--bottom-nav-h']) {
-        assert.ok(appCss.includes(token + ':'), `${token} must remain defined`);
-      }
-      assert.ok(/\.shell\s*\{[\s\S]*grid-template-columns:\s*var\(--sidebar-w\)/.test(workspaceCss),
-        'the workspace shell must still use --sidebar-w');
-    });
-
-    it('keeps the shared primitives the workspace relies on', () => {
-      for (const selector of ['.btn', '.icon-btn', '.chip', '.card', '.field-control', '.segmented', '.sr-only']) {
-        assert.ok(appCss.includes(selector), `${selector} must remain in the shared layer`);
-      }
+    it('renders a configured background as restrained non-interactive content', () => {
+      const background = landingCss.match(/body\.landing-body\.has-custom-background::before\s*\{[^}]*\}/)[0];
+      assert.ok(background.includes('pointer-events: none'));
+      assert.ok(/opacity:\s*\.\d+/.test(background));
+      assert.ok(!/filter:\s*blur/.test(background));
     });
   });
 });

@@ -101,6 +101,24 @@ async function boot(options = {}) {
         });
       }
     }
+    // The canonical /admin workspace is session-gated and hydrates its remote
+    // catalog during startup. Keep that baseline deterministic; individual
+    // tests can override any route above when exercising errors or fixtures.
+    if (url.includes('/api/manage/session')) {
+      return new Response(JSON.stringify({ authenticated: true, user: 'admin' }), {
+        status: 200, headers: { 'Content-Type': 'application/json' },
+      });
+    }
+    if (url.includes('/api/manage/list')) {
+      return new Response(JSON.stringify({ keys: [], list_complete: true }), {
+        status: 200, headers: { 'Content-Type': 'application/json' },
+      });
+    }
+    if (url.includes('/api/manage/albums')) {
+      return new Response(JSON.stringify({ albums: [], list_complete: true }), {
+        status: 200, headers: { 'Content-Type': 'application/json' },
+      });
+    }
     return new Response('{}', { status: 404, headers: { 'Content-Type': 'application/json' } });
   };
 

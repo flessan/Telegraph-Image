@@ -2,375 +2,146 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="description" content="Telegraph-Image object workspace — stage files locally, then push them to storage.">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="description" content="Telegraph Storage is a local-first workspace for reviewing, publishing, organizing, and managing files with Telegraph-Image.">
   <meta name="color-scheme" content="light dark">
+  <link rel="canonical" href="/">
   <link rel="icon" type="image/x-icon" href="/favicon.ico">
-  <title>Telegraph-Image</title>
+  <title>Telegraph Storage</title>
   <link rel="stylesheet" href="/css/app.css">
-  <link rel="stylesheet" href="/css/workspace.css">
+  <link rel="stylesheet" href="/css/landing.css">
 </head>
-<body>
-  <a class="skip-link" href="#browser" data-i18n="skipToContent">Skip to files</a>
+<body class="landing-body">
+  <a class="skip-link" href="#main" data-i18n="landingSkip">Skip to content</a>
 
-  <div class="app" id="app">
-    <header class="app-header">
-      <a class="brand" href="/" id="brand-link">
-        <span class="brand-mark" aria-hidden="true">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
-            <rect x="3.5" y="8.5" width="13" height="12" rx="2"/>
-            <path d="M7.5 8.5V6.2A2.2 2.2 0 0 1 9.7 4h10.1A1.7 1.7 0 0 1 21.5 5.7v10.6a2.2 2.2 0 0 1-2.2 2.2H16.5"/>
+  <header class="landing-header" id="landing-header">
+    <a class="landing-brand" href="/" aria-label="Telegraph Storage home">
+      <span class="brand-mark" aria-hidden="true">
+        <svg focusable="false" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="8.5" width="13" height="12" rx="2"/><path d="M7.5 8.5V6.2A2.2 2.2 0 0 1 9.7 4h10.1A1.7 1.7 0 0 1 21.5 5.7v10.6a2.2 2.2 0 0 1-2.2 2.2H16.5"/></svg>
+      </span>
+      <span class="brand-copy"><strong id="site-name">Telegraph Storage</strong><small>Telegraph-Image</small></span>
+    </a>
+    <nav class="landing-nav" aria-label="Primary navigation">
+      <a href="#workflow" data-i18n="landingNavWorkflow">Workflow</a>
+      <a href="#capabilities" data-i18n="landingNavCapabilities">Capabilities</a>
+      <a href="https://github.com/flessan/Telegraph-Image" target="_blank" rel="noopener" data-i18n="landingSource">Source</a>
+      <span class="nav-divider" aria-hidden="true"></span>
+      <button type="button" class="icon-btn" id="theme-btn" data-i18n-aria="themeToggleAria">
+        <svg class="theme-icon theme-icon-sun" focusable="false" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 3v2M12 19v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M3 12h2M19 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+      </button>
+      <button type="button" class="language-btn" id="lang-btn" data-i18n-aria="languageAria"><span id="lang-code">EN</span></button>
+    </nav>
+    <div class="scroll-progress" aria-hidden="true"><span id="scroll-progress-bar"></span></div>
+  </header>
+
+  <main id="main">
+    <section class="landing-hero" aria-labelledby="hero-title">
+      <div class="hero-copy">
+        <p class="eyebrow hero-reveal"><span class="signal-dot" aria-hidden="true"></span><span data-i18n="landingEyebrow">A considered Telegraph-Image workspace</span></p>
+        <h1 id="hero-title" class="hero-reveal" data-i18n="landingTitle">Files should be reviewed before they are published.</h1>
+        <p class="hero-lede hero-reveal" data-i18n="landingLede">Telegraph Storage turns this customized fork into one clear workflow: stage files in your browser, inspect them, then push them sequentially to the storage you already configured.</p>
+        <div class="hero-actions hero-reveal">
+          <a class="btn landing-primary" href="/admin"><span data-i18n="openDashboard">Open Dashboard</span><svg focusable="false" aria-hidden="true" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 10h11M11 6l4 4-4 4"/></svg></a>
+          <a class="btn source-action" href="https://github.com/flessan/Telegraph-Image" target="_blank" rel="noopener"><svg focusable="false" aria-hidden="true" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M7.5 15.5c-3 .9-3-1.5-4.2-1.9m8.4 3.1v-2.3c0-.7.2-1.3-.3-1.8 2.4-.3 4.9-1.2 4.9-5.3a4.1 4.1 0 0 0-1.1-2.9 3.8 3.8 0 0 0-.1-2.9s-.9-.3-3 1.1a10.2 10.2 0 0 0-5.4 0c-2-1.4-3-1.1-3-1.1a3.9 3.9 0 0 0-.1 2.9 4.1 4.1 0 0 0-1.1 2.9c0 4.1 2.5 5 4.9 5.3-.4.4-.5.9-.5 1.4v2.7"/></svg><span data-i18n="viewSource">View source</span></a>
+        </div>
+        <p class="hero-note hero-reveal"><span aria-hidden="true">↳</span> <span data-i18n="landingAuthNote">The dashboard uses the existing site sign-in when authentication is enabled.</span></p>
+      </div>
+
+      <aside class="storage-visual hero-reveal" id="storage-visual" aria-label="Storage workflow" data-i18n-aria="landingNavWorkflow">
+        <div class="visual-grid" aria-hidden="true"></div>
+        <div class="visual-topline" aria-hidden="true"><span>TS / 01</span><span class="visual-status"><i></i><span data-i18n="landingVisualStatus">Local → remote</span></span></div>
+        <div class="orbit-field" aria-hidden="true">
+          <svg class="flow-map" viewBox="0 0 520 420" preserveAspectRatio="none">
+            <path class="flow-path flow-path-a" d="M76 88 C180 88 150 210 260 210 S350 92 448 92"/>
+            <path class="flow-path flow-path-b" d="M76 330 C180 330 150 210 260 210 S350 330 448 330"/>
+            <path class="flow-path flow-path-c" d="M260 210 C260 120 260 112 260 42"/>
           </svg>
-        </span>
-        <span class="brand-text">
-          <span class="brand-name" id="site-name">Telegraph-Image</span>
-          <span class="brand-tag" data-i18n="appTagline">Object workspace</span>
-        </span>
-      </a>
-
-      <div class="search" id="search-wrap">
-        <span class="search-icon" aria-hidden="true">
-          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="11" cy="11" r="6.25"/><path d="M16 16l4 4"/></svg>
-        </span>
-        <input id="search" class="search-field" type="search" autocomplete="off" spellcheck="false" data-i18n-placeholder="searchPlaceholder" data-i18n-aria="searchAria" placeholder="Search files">
-        <button type="button" class="search-clear" id="search-clear" hidden data-i18n-aria="clearSearch" title="">
-          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
-        </button>
-      </div>
-
-      <div class="header-actions" role="toolbar" data-i18n-aria="utilities">
-        <button type="button" class="icon-btn mobile-search-toggle" id="mobile-search-toggle" data-i18n-aria="searchAria">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="11" cy="11" r="6.25"/><path d="M16 16l4 4"/></svg>
-        </button>
-        <button type="button" class="icon-btn hide-phone" id="refresh-btn" data-i18n-aria="refreshAria" data-i18n-title="refresh">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 1 1-2.2-5.5"/><path d="M20 4v5h-5"/></svg>
-        </button>
-        <button type="button" class="icon-btn" id="theme-btn" data-i18n-aria="themeToggleAria" aria-pressed="false">
-          <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 3v2M12 19v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M3 12h2M19 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
-        </button>
-        <button type="button" class="icon-btn hide-phone" id="lang-btn" data-i18n-aria="languageAria" data-i18n-title="language">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.6 3 3.9 6 3.9 9s-1.3 6-3.9 9c-2.6-3-3.9-6-3.9-9S9.4 6 12 3z"/></svg>
-        </button>
-        <a class="icon-btn with-label" id="admin-link" href="/admin.html" data-i18n-aria="dashboardAria">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="3.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.5"/></svg>
-          <span class="btn-label" data-i18n="dashboard">Dashboard</span>
-        </a>
-        <a class="icon-btn hide-phone" href="https://github.com/cf-pages/Telegraph-Image" target="_blank" rel="noopener" data-i18n-aria="githubAria" data-i18n-title="github">
-          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5A11.5 11.5 0 0 0 .5 12a11.5 11.5 0 0 0 7.86 10.92c.58.1.79-.25.79-.55v-2.1c-3.2.7-3.88-1.4-3.88-1.4-.53-1.34-1.29-1.7-1.29-1.7-1.05-.72.08-.7.08-.7 1.16.08 1.77 1.2 1.77 1.2 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.23-1.28-5.23-5.7 0-1.26.45-2.29 1.19-3.1-.12-.29-.52-1.46.11-3.05 0 0 .96-.3 3.15 1.18a10.9 10.9 0 0 1 5.74 0c2.18-1.48 3.14-1.18 3.14-1.18.63 1.59.23 2.76.12 3.05.74.81 1.18 1.84 1.18 3.1 0 4.43-2.69 5.4-5.25 5.69.41.36.78 1.06.78 2.14v3.17c0 .3.2.66.79.55A11.5 11.5 0 0 0 23.5 12A11.5 11.5 0 0 0 12 .5"/></svg>
-        </a>
-        <button type="button" class="icon-btn" id="overflow-btn" data-i18n-aria="moreActions">
-          <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="6" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="18" cy="12" r="1.6"/></svg>
-        </button>
-      </div>
-    </header>
-
-    <div class="shell">
-      <aside class="sidebar" aria-label="Workspace">
-        <nav class="side-nav" data-i18n-aria="navAria">
-          <button type="button" class="nav-item" data-view="files" aria-current="page">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M4 7.5A2.5 2.5 0 0 1 6.5 5H10l2 2h5.5A2.5 2.5 0 0 1 20 9.5v8A2.5 2.5 0 0 1 17.5 20h-11A2.5 2.5 0 0 1 4 17.5v-10z"/></svg>
-            <span data-i18n="navFiles">Files</span>
-          </button>
-          <button type="button" class="nav-item" data-view="images">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="17" height="14" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M3.8 16.5l4.4-4.2 3.1 3 2.4-2.3 6.3 5.3"/></svg>
-            <span data-i18n="navImages">Images</span>
-          </button>
-          <button type="button" class="nav-item" data-view="albums">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 8.2A2.2 2.2 0 0 1 5.7 6h3.1l1.8 1.8h7.7A2.2 2.2 0 0 1 20.5 10v7.3a2.2 2.2 0 0 1-2.2 2.2H5.7a2.2 2.2 0 0 1-2.2-2.2z"/><path d="M6.6 6V4.8A1.3 1.3 0 0 1 7.9 3.5h4.4"/></svg>
-            <span data-i18n="navAlbums">Albums</span>
-          </button>
-          <button type="button" class="nav-item" data-view="recent">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="8.25"/><path d="M12 8v4.4l2.8 1.6"/></svg>
-            <span data-i18n="navRecent">Recent</span>
-          </button>
-          <button type="button" class="nav-item" data-view="changes">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7h10M5 12h14M5 17h8"/><path d="M17.5 15.5v5M15 18h5"/></svg>
-            <span data-i18n="navChanges">Changes</span>
-            <span class="nav-badge" id="nav-changes-badge" hidden>0</span>
-          </button>
-        </nav>
-
-        <section class="album-nav" id="album-nav" aria-labelledby="album-nav-title">
-          <div class="album-nav-head">
-            <h2 id="album-nav-title" data-i18n="navAlbums">Albums</h2>
-            <button type="button" class="icon-btn sm" id="album-new" data-i18n-aria="newAlbum" data-i18n-title="newAlbum">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M12 6v12M6 12h12"/></svg>
-            </button>
-          </div>
-          <ul class="album-tree" id="album-tree" role="tree" data-i18n-aria="albumTreeAria"></ul>
-          <p class="album-nav-empty" id="album-nav-empty" data-i18n="albumTreeEmpty">No albums yet. Create one to group objects.</p>
-          <div class="album-sync-row" id="album-sync-row" hidden>
-            <span id="album-sync-note"></span>
-            <button type="button" class="btn text" id="album-sync-btn" data-i18n="commandSyncAlbums">Sync album changes</button>
-          </div>
-        </section>
-
-        <button type="button" class="staging-card" id="staging-card" data-i18n-aria="openChanges">
-          <h2 data-i18n="stagingTitle">Ready to send</h2>
-          <div class="staging-count" id="staging-count">0</div>
-          <p id="staging-copy" data-i18n="stagingEmpty">No pending changes</p>
-          <p class="staging-size" id="staging-size"></p>
-        </button>
-        <p class="sidebar-hint" data-i18n="sidebarHint">This browser keeps a local catalog. The public dashboard lists the full remote store when it is enabled.</p>
+          <span class="packet packet-a"></span><span class="packet packet-b"></span><span class="packet packet-c"></span>
+          <div class="flow-node node-stage"><span>01</span><strong data-i18n="landingStageTitle">Stage locally</strong></div>
+          <div class="flow-node node-review"><span>02</span><strong data-i18n="landingReviewTitle">Review in context</strong></div>
+          <div class="flow-node node-push"><span>03</span><strong data-i18n="landingPushTitle">Push sequentially</strong></div>
+          <div class="flow-node node-remote"><span>04</span><strong data-i18n="landingManageTitle">Manage remotely</strong></div>
+          <div class="flow-hub"><span class="hub-ring"></span><svg focusable="false" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 7.5C4 5.6 7.6 4 12 4s8 1.6 8 3.5S16.4 11 12 11 4 9.4 4 7.5Z"/><path d="M4 7.5v4c0 2 3.6 3.5 8 3.5s8-1.5 8-3.5v-4M4 11.5v4C4 17.4 7.6 19 12 19s8-1.6 8-3.5v-4"/></svg></div>
+        </div>
+        <div class="visual-caption"><span data-i18n="landingWorkflowKicker">Local first, remote when intended</span><i aria-hidden="true"></i></div>
       </aside>
+    </section>
 
-      <main class="workspace" id="dropzone">
-        <div class="toolbar">
-          <nav class="crumbs" aria-label="Breadcrumb">
-            <ol id="crumbs">
-              <li><span data-i18n="breadcrumbRoot">Storage</span><span class="sep" aria-hidden="true">/</span></li>
-              <li id="crumb-current" data-i18n="navFiles">Files</li>
-            </ol>
-            <span class="file-count" id="visible-count"></span>
-          </nav>
-          <div class="toolbar-actions">
-            <button type="button" class="btn tonal" id="add-files" data-i18n-aria="addFilesAria">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
-              <span data-i18n="addFiles">Add files</span>
-            </button>
-            <button type="button" class="btn outlined" id="new-album-btn" hidden data-i18n-aria="newAlbumAria">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 8.2A2.2 2.2 0 0 1 5.7 6h3.1l1.8 1.8h7.7A2.2 2.2 0 0 1 20.5 10v7.3a2.2 2.2 0 0 1-2.2 2.2H5.7a2.2 2.2 0 0 1-2.2-2.2z"/><path d="M12 11.4v4.4M9.8 13.6h4.4"/></svg>
-              <span class="btn-hide-sm" data-i18n="newAlbum">New album</span>
-            </button>
-            <button type="button" class="btn" id="push-changes" disabled data-i18n-aria="pushChangesAria">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4.5m0 0L7.4 9M12 4.5L16.6 9M5 16.5v2.2A1.8 1.8 0 0 0 6.8 20.5h10.4a1.8 1.8 0 0 0 1.8-1.8v-2.2"/></svg>
-              <span id="push-label" data-i18n="pushChanges">Push changes</span>
-            </button>
-            <div class="segmented" role="group">
-              <button type="button" id="view-grid" aria-pressed="true" data-i18n-aria="viewGridAria" data-i18n-title="viewGrid">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="4" y="4" width="7" height="7" rx="1.4"/><rect x="13" y="4" width="7" height="7" rx="1.4"/><rect x="4" y="13" width="7" height="7" rx="1.4"/><rect x="13" y="13" width="7" height="7" rx="1.4"/></svg>
-              </button>
-              <button type="button" id="view-list" aria-pressed="false" data-i18n-aria="viewListAria" data-i18n-title="viewList">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M8 7h12M8 12h12M8 17h12M4.2 7h.01M4.2 12h.01M4.2 17h.01"/></svg>
-              </button>
-            </div>
-            <label class="sr-only" for="sort-select" data-i18n="sortBy">Sort</label>
-            <select id="sort-select" class="select">
-              <option value="date:desc" data-i18n="sortDate">Date added</option>
-              <option value="name:asc" data-i18n="sortName">Name</option>
-              <option value="size:desc" data-i18n="sortSize">Size</option>
-            </select>
-          </div>
-        </div>
-
-        <div id="offline-banner" class="offline-banner" hidden role="status"></div>
-
-        <section id="push-panel" class="push-panel" hidden aria-labelledby="push-phase">
-          <div class="push-head">
-            <div class="push-head-text">
-              <h2 id="push-phase">Uploading</h2>
-              <p id="push-progress-text"></p>
-            </div>
-            <div class="push-controls">
-              <button type="button" class="btn text" id="push-pause">Pause</button>
-              <button type="button" class="btn text" id="push-cancel" data-i18n="queueCancel">Cancel</button>
-              <button type="button" class="btn text" id="push-retry-failed" hidden>Retry failed</button>
-              <button type="button" class="btn text" id="push-dismiss" hidden data-i18n="queueDone">Done</button>
-            </div>
-          </div>
-          <div class="push-bar" id="push-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100"><i id="push-bar-fill"></i></div>
-          <div class="push-current" id="push-current" hidden>
-            <div class="push-current-row">
-              <span class="push-current-name" id="push-current-name"></span>
-              <span class="push-current-state" id="push-current-state"></span>
-            </div>
-            <div class="push-bar sm"><i id="push-current-fill"></i></div>
-          </div>
-          <p class="push-note" id="push-note" role="status"></p>
-        </section>
-        <div id="setup-notice" class="setup-stack" role="status" aria-live="polite"></div>
-        <div id="bulk-bar" class="bulk-bar" hidden>
-          <span id="bulk-count"></span>
-          <div class="bulk-actions">
-            <button type="button" class="btn tonal" id="bulk-push" data-i18n="pushSelected">Push selected</button>
-            <button type="button" class="btn outlined" id="bulk-move" data-i18n="moveToAlbum">Move to album</button>
-            <button type="button" class="btn outlined" id="bulk-copy" data-i18n="copySelected">Copy selected URLs</button>
-            <button type="button" class="btn outlined" id="bulk-download" data-i18n="downloadSelected">Download selected</button>
-            <button type="button" class="btn text" id="bulk-remove" data-i18n="removeSelected">Remove selected</button>
-            <button type="button" class="btn text" id="bulk-clear" data-i18n="clearSelection">Clear selection</button>
-          </div>
-        </div>
-        <section id="changes-panel" class="changes-panel" hidden>
-          <div class="changes-head">
-            <div>
-              <h2 data-i18n="changesTitle">Changes</h2>
-              <p id="changes-summary"></p>
-            </div>
-            <div class="changes-actions">
-              <button type="button" class="btn text" id="clear-pending" data-i18n-aria="clearPendingAria" data-i18n="clearPending">Clear pending</button>
-              <button type="button" class="btn text" id="retry-failed" hidden data-i18n="retryFailed">Retry failed</button>
-            </div>
-          </div>
-          <ul id="changes-list" class="changes-list"></ul>
-        </section>
-
-        <div class="browser" id="browser" tabindex="-1">
-          <div id="file-stage"></div>
-        </div>
-
-        <section class="links-panel" id="results-card" hidden>
-          <div class="links-head">
-            <div>
-              <h2 data-i18n="linksTitle">Public links</h2>
-              <p data-i18n="linksHint">Copied from files already pushed in this workspace.</p>
-            </div>
-            <div class="segmented" id="format-tabs" role="tablist">
-              <button type="button" data-format="url" class="active" role="tab" aria-selected="true">URL</button>
-              <button type="button" data-format="markdown" role="tab" aria-selected="false">Markdown</button>
-              <button type="button" data-format="bbcode" role="tab" aria-selected="false">BBCode</button>
-              <button type="button" data-format="html" role="tab" aria-selected="false">HTML</button>
-            </div>
-          </div>
-          <textarea id="link-output" readonly spellcheck="false"></textarea>
-          <div class="toolbar-actions" style="margin-top:12px;justify-content:flex-end">
-            <button type="button" class="btn outlined" id="copy-all" data-i18n="copyAll">Copy all</button>
-          </div>
-        </section>
-
-        <div class="drop-layer" aria-hidden="true">
-          <div>
-            <strong data-i18n="dropTitle">Drop files to add them</strong>
-            <span data-i18n="dropBody">They will stay on this device until you push changes.</span>
-          </div>
-        </div>
-      </main>
-    </div>
-
-    <footer class="status-bar">
-      <span id="status-local"></span>
-      <span id="status-files"></span>
-      <span id="status-pending"></span>
-      <span id="status-failed"></span>
-      <span id="status-synced"></span>
-      <span id="status-selection"></span>
-      <div class="push-meter" id="push-meter" hidden><i></i></div>
-    </footer>
-  </div>
-
-  <nav class="bottom-nav" data-i18n-aria="navAria">
-    <button type="button" data-view="files" aria-current="page">
-      <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 7.5A2.5 2.5 0 0 1 6.5 5H10l2 2h5.5A2.5 2.5 0 0 1 20 9.5v8A2.5 2.5 0 0 1 17.5 20h-11A2.5 2.5 0 0 1 4 17.5v-10z"/></svg></span>
-      <span data-i18n="navFiles">Files</span>
-    </button>
-    <button type="button" data-view="images">
-      <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3.5" y="5" width="17" height="14" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M3.8 16.5l4.4-4.2 3.1 3 2.4-2.3 6.3 5.3"/></svg></span>
-      <span data-i18n="navImages">Images</span>
-    </button>
-    <button type="button" data-view="albums">
-      <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M3.5 8.2A2.2 2.2 0 0 1 5.7 6h3.1l1.8 1.8h7.7A2.2 2.2 0 0 1 20.5 10v7.3a2.2 2.2 0 0 1-2.2 2.2H5.7a2.2 2.2 0 0 1-2.2-2.2z"/></svg></span>
-      <span data-i18n="navAlbums">Albums</span>
-    </button>
-    <button type="button" data-view="recent">
-      <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="8.25"/><path d="M12 8v4.4l2.8 1.6"/></svg></span>
-      <span data-i18n="navRecent">Recent</span>
-    </button>
-    <button type="button" data-view="changes">
-      <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M5 7h10M5 12h14M5 17h8"/><path d="M17.5 15.5v5M15 18h5"/></svg></span>
-      <span data-i18n="navChanges">Changes</span>
-    </button>
-  </nav>
-
-  <button type="button" class="fab" id="fab-add" data-i18n-aria="fabAdd">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
-  </button>
-
-  <input id="file-input" type="file" multiple hidden>
-
-  <div class="overlay" id="overlay" hidden></div>
-
-  <div class="dialog" id="preview-dialog" role="dialog" aria-modal="true" aria-labelledby="preview-title" hidden>
-    <div class="dialog-head">
-      <h2 id="preview-title" data-i18n="previewTitle">File preview</h2>
-      <div class="preview-tools">
-        <button type="button" class="icon-btn" id="preview-prev" data-i18n-aria="previewPrev">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M15 6l-6 6 6 6"/></svg>
-        </button>
-        <button type="button" class="icon-btn" id="preview-next" data-i18n-aria="previewNext">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M9 6l6 6-6 6"/></svg>
-        </button>
-        <button type="button" class="icon-btn" id="preview-zoom" data-i18n-aria="previewZoom">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="11" cy="11" r="6"/><path d="M16 16l4 4M11 8v6M8 11h6"/></svg>
-        </button>
-        <button type="button" class="icon-btn" id="preview-close" data-i18n-aria="previewClose">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
-        </button>
+    <div class="motion-rail" aria-hidden="true">
+      <div class="motion-track">
+        <span data-i18n="landingStageTitle">Stage locally</span><i>◆</i><span data-i18n="landingReviewTitle">Review in context</span><i>◆</i><span data-i18n="landingPushTitle">Push sequentially</span><i>◆</i><span data-i18n="landingManageTitle">Manage remotely</span><i>◆</i>
+        <span data-i18n="landingStageTitle">Stage locally</span><i>◆</i><span data-i18n="landingReviewTitle">Review in context</span><i>◆</i><span data-i18n="landingPushTitle">Push sequentially</span><i>◆</i><span data-i18n="landingManageTitle">Manage remotely</span><i>◆</i>
       </div>
     </div>
-    <div class="preview-layout">
-      <div class="preview-stage" id="preview-stage"></div>
-      <div class="preview-meta">
-        <div class="meta-row"><dt data-i18n="metaFilename">Filename</dt><dd id="meta-name"></dd></div>
-        <div class="meta-row"><dt data-i18n="metaDimensions">Dimensions</dt><dd id="meta-dims"></dd></div>
-        <div class="meta-row"><dt data-i18n="metaMime">MIME type</dt><dd id="meta-mime"></dd></div>
-        <div class="meta-row"><dt data-i18n="metaSize">Size</dt><dd id="meta-size"></dd></div>
-        <div class="meta-row"><dt data-i18n="metaStatus">Status</dt><dd id="meta-status"></dd></div>
-        <div class="meta-row"><dt data-i18n="metaUrl">Public URL</dt><dd><input id="meta-url" readonly spellcheck="false"></dd></div>
-        <div class="preview-actions">
-          <button type="button" class="btn" id="preview-copy" data-i18n="copyOne">Copy URL</button>
-          <button type="button" class="btn outlined" id="preview-download" data-i18n="download">Download</button>
-          <button type="button" class="btn text" id="preview-retry" hidden data-i18n="retry">Retry</button>
-        </div>
+
+    <section class="workflow-story" id="workflow" aria-labelledby="principle-title">
+      <div class="story-intro reveal-on-scroll">
+        <p class="section-kicker" data-i18n="landingWorkflowKicker">Local first, remote when intended</p>
+        <h2 id="principle-title" data-i18n="landingWorkflowTitle">A staging area, not an instant-upload trap.</h2>
+        <p data-i18n="landingWorkflowBody">Nothing is sent merely because it entered the workspace. Push is a deliberate boundary. If a request fails, the local item stays available for review and retry instead of disappearing into an optimistic success screen.</p>
+        <span class="story-index" aria-hidden="true">01 — 04</span>
       </div>
-    </div>
-  </div>
+      <ol class="workflow-steps">
+        <li class="workflow-step reveal-on-scroll" data-step="01">
+          <div class="step-marker"><span>01</span><i></i></div>
+          <div><h3 data-i18n="landingStageTitle">Stage locally</h3><p data-i18n="landingStageBody">Add, drop, or paste files. Stable local copies remain on this device until you choose Push.</p></div>
+          <svg focusable="false" aria-hidden="true" viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M7 11.5h18v14H7zM10 11.5V8h8l3 3.5M16 15v7M12.5 18.5h7"/></svg>
+        </li>
+        <li class="workflow-step reveal-on-scroll" data-step="02">
+          <div class="step-marker"><span>02</span><i></i></div>
+          <div><h3 data-i18n="landingReviewTitle">Review in context</h3><p data-i18n="landingReviewBody">Check MIME-aware previews, names, destinations, Albums, and the exact public output.</p></div>
+          <svg focusable="false" aria-hidden="true" viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M4.5 16s4.2-7 11.5-7 11.5 7 11.5 7-4.2 7-11.5 7S4.5 16 4.5 16Z"/><circle cx="16" cy="16" r="3.5"/></svg>
+        </li>
+        <li class="workflow-step reveal-on-scroll" data-step="03">
+          <div class="step-marker"><span>03</span><i></i></div>
+          <div><h3 data-i18n="landingPushTitle">Push sequentially</h3><p data-i18n="landingPushBody">One request runs at a time, with spacing, bounded retries, pause, cancel, and truthful progress.</p></div>
+          <svg focusable="false" aria-hidden="true" viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M16 25V7M9.5 13.5 16 7l6.5 6.5M7 25h18"/></svg>
+        </li>
+        <li class="workflow-step reveal-on-scroll" data-step="04">
+          <div class="step-marker"><span>04</span><i></i></div>
+          <div><h3 data-i18n="landingManageTitle">Manage remotely</h3><p data-i18n="landingManageBody">Search the remote index, organize Albums, and manage metadata or moderation without changing public object identities.</p></div>
+          <svg focusable="false" aria-hidden="true" viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M6 10c0-2.2 4.5-4 10-4s10 1.8 10 4-4.5 4-10 4S6 12.2 6 10Z"/><path d="M6 10v6c0 2.2 4.5 4 10 4s10-1.8 10-4v-6M6 16v6c0 2.2 4.5 4 10 4s10-1.8 10-4v-6"/></svg>
+        </li>
+      </ol>
+    </section>
 
-  <div class="dialog confirm" id="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-title" hidden>
-    <div class="dialog-head"><h2 id="confirm-title" data-i18n="confirmRemoveTitle">Remove from workspace?</h2></div>
-    <div class="dialog-body">
-      <p id="confirm-body"></p>
-      <div class="confirm-actions">
-        <button type="button" class="btn outlined" id="confirm-cancel" data-i18n="cancel">Cancel</button>
-        <button type="button" class="btn danger" id="confirm-ok" data-i18n="confirmRemove">Remove</button>
+    <section class="capabilities" id="capabilities" aria-labelledby="capabilities-title">
+      <div class="section-heading reveal-on-scroll">
+        <p class="section-kicker" data-i18n="landingCapabilitiesKicker">What the dashboard brings together</p>
+        <h2 id="capabilities-title" data-i18n="landingCapabilitiesTitle">One place for the full object lifecycle.</h2>
       </div>
-    </div>
-  </div>
-
-  <div class="dialog album-dialog" id="album-dialog" role="dialog" aria-modal="true" aria-labelledby="album-dialog-title" hidden>
-    <div class="dialog-head"><h2 id="album-dialog-title" data-i18n="newAlbum">New album</h2></div>
-    <div class="dialog-body">
-      <p class="dialog-context" id="album-dialog-context"></p>
-      <label class="field">
-        <span class="field-label" data-i18n="albumNameLabel">Album name</span>
-        <input class="field-control" id="album-name-input" type="text" maxlength="64" autocomplete="off" spellcheck="false">
-        <span class="field-error" id="album-name-error" role="alert"></span>
-      </label>
-      <div class="confirm-actions">
-        <button type="button" class="btn outlined" id="album-cancel" data-i18n="cancel">Cancel</button>
-        <button type="button" class="btn" id="album-save" data-i18n="create">Create</button>
+      <div class="capability-grid">
+        <article class="capability-card capability-albums reveal-on-scroll">
+          <div class="capability-number">01</div>
+          <div class="capability-art album-art" aria-hidden="true"><span></span><span></span><span></span></div>
+          <div><h3 data-i18n="landingCapAlbumsTitle">Nested Albums</h3><p data-i18n="landingCapAlbumsBody">Group local and remote objects in a hierarchy. Moving or deleting an Album does not rewrite or delete its files.</p></div>
+        </article>
+        <article class="capability-card capability-preview reveal-on-scroll">
+          <div class="capability-number">02</div>
+          <div class="capability-art preview-art" aria-hidden="true"><span class="preview-frame"><i></i><b></b></span><span class="preview-type">IMG</span><span class="preview-type">PDF</span><span class="preview-type">WAV</span></div>
+          <div><h3 data-i18n="landingCapPreviewTitle">MIME-aware previews</h3><p data-i18n="landingCapPreviewBody">Images, video, audio, PDFs, and generic files receive appropriate surfaces rather than being treated as pictures.</p></div>
+        </article>
+        <article class="capability-card capability-links reveal-on-scroll">
+          <div class="capability-number">03</div>
+          <div class="capability-art code-art" aria-hidden="true"><span>&lt;a href=&quot;/file/…&quot;&gt;</span><span>![name](/file/…)</span><span>[url]/file/…[/url]</span><i></i></div>
+          <div><h3 data-i18n="landingCapLinksTitle">Safe public links</h3><p data-i18n="landingCapLinksBody">Copy URL, Markdown, BBCode, or HTML output with file-aware markup and escaping after an object is published.</p></div>
+        </article>
+        <article class="capability-card capability-remote reveal-on-scroll">
+          <div class="capability-number">04</div>
+          <div class="capability-art remote-art" aria-hidden="true"><span class="remote-core"></span><span class="remote-orbit orbit-one"></span><span class="remote-orbit orbit-two"></span><i></i><i></i><i></i></div>
+          <div><h3 data-i18n="landingCapRemoteTitle">Remote management</h3><p data-i18n="landingCapRemoteBody">Browse paginated records, search and sort, rename display metadata, save, moderate, or remove index records.</p></div>
+        </article>
       </div>
-    </div>
-  </div>
+    </section>
 
-  <div class="dialog move-dialog" id="move-dialog" role="dialog" aria-modal="true" aria-labelledby="move-dialog-title" hidden>
-    <div class="dialog-head"><h2 id="move-dialog-title" data-i18n="moveToAlbum">Move to album</h2></div>
-    <div class="dialog-body">
-      <p class="dialog-context" id="move-dialog-context"></p>
-      <ul class="album-picker" id="move-picker" role="tree" data-i18n-aria="albumPickerAria"></ul>
-      <p class="dialog-note" id="move-dialog-note"></p>
-      <div class="confirm-actions">
-        <button type="button" class="btn text" id="move-create" data-i18n="createInside">Create inside</button>
-        <button type="button" class="btn outlined" id="move-cancel" data-i18n="cancel">Cancel</button>
-        <button type="button" class="btn" id="move-confirm" data-i18n="moveHere">Move here</button>
-      </div>
-    </div>
-  </div>
+    <section class="lineage reveal-on-scroll" aria-labelledby="lineage-title">
+      <div class="lineage-mark" aria-hidden="true"><span>TS</span><i></i></div>
+      <div class="lineage-heading"><p class="section-kicker" data-i18n="landingForkKicker">About this fork</p><h2 id="lineage-title" data-i18n="landingForkTitle">Built on Telegraph-Image, reorganized for deliberate storage work.</h2></div>
+      <div class="lineage-copy"><p data-i18n="landingForkBody">This repository retains the project’s upload, Telegram and R2 provider paths, public file serving, moderation, and management APIs. The customization focuses on a coherent landing page, sign-in, and authenticated workspace around those capabilities.</p><div class="lineage-actions"><a class="btn lineage-primary" href="/admin" data-i18n="openDashboard">Open Dashboard</a><a href="https://github.com/flessan/Telegraph-Image" target="_blank" rel="noopener" data-i18n="landingExploreRepo">Explore the repository →</a></div></div>
+    </section>
+  </main>
 
-  <div class="dialog command-dialog" id="command-dialog" role="dialog" aria-modal="true" aria-labelledby="command-title" hidden>
-    <div class="command-shell">
-      <h2 id="command-title" class="sr-only" data-i18n="commandTitle">Commands</h2>
-      <input id="command-input" class="command-input" type="search" autocomplete="off" spellcheck="false" data-i18n-placeholder="commandPlaceholder" data-i18n-aria="commandTitle">
-      <ul id="command-list" class="command-list" role="listbox"></ul>
-    </div>
-  </div>
-
-  <div class="menu" id="context-menu" role="menu" hidden></div>
-  <div class="menu" id="lang-menu" role="menu" hidden></div>
-  <div class="menu" id="overflow-menu" role="menu" hidden></div>
-
-  <div id="drag-hint" class="drag-hint" hidden aria-hidden="true"></div>
-  <div id="toast" class="toast" role="status" aria-live="polite"></div>
-  <div id="live" class="sr-only" aria-live="polite" aria-atomic="true"></div>
-
-  <script type="module" src="/js/workspace.js"></script>
+  <footer class="landing-footer"><span>Telegraph Storage</span><span data-i18n="landingFooter">A customized Telegraph-Image interface.</span><a href="/admin" data-i18n="openDashboard">Open Dashboard</a></footer>
+  <script type="module" src="/js/landing.js"></script>
 </body>
 </html>

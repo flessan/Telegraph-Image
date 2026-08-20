@@ -255,14 +255,14 @@ async function runAction(name, url, { method = 'GET', body } = {}) {
 
 /* ------------------------ session / auth ------------------------- */
 function handleSessionExpired() {
-  const next = encodeURIComponent('/admin.html');
+  const next = encodeURIComponent('/admin');
   // Preserve a one-time message across the redirect via sessionStorage.
   try { sessionStorage.setItem('ti.session-expired', '1'); } catch (_) { /* ignore */ }
-  window.location.href = `/login.html?next=${next}`;
+  window.location.href = `/login?next=${next}`;
 }
 async function logout() {
   try { await api('/api/manage/logout', { method: 'POST' }); } catch (_) { /* ignore */ }
-  window.location.href = '/login.html';
+  window.location.href = '/login';
 }
 
 /* --------------------------- clipboard --------------------------- */

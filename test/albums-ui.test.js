@@ -16,7 +16,7 @@ const workspaceCss = read('css/workspace.css');
 const indexHtml = read('index.html');
 const adminHtml = read('admin.html');
 const workspaceJs = read('js/workspace.js');
-const adminJs = read('js/admin.js');
+
 const albumsJs = read('js/albums.js');
 
 function rule(css, selector) {
@@ -66,20 +66,16 @@ describe('album layer — layout resilience', () => {
       assert.ok(rule(appCss, selector).includes('text-overflow: ellipsis'), `${selector} must truncate`);
     }
     assert.ok(rule(workspaceCss, '.crumb-link').includes('text-overflow: ellipsis'));
-    assert.ok(rule(adminCss, '.album-crumbs .crumb-link').includes('text-overflow: ellipsis'));
   });
 
   it('lets deep breadcrumbs wrap instead of overflowing the toolbar', () => {
     assert.ok(rule(workspaceCss, '.crumbs ol').includes('flex-wrap: wrap'));
-    assert.ok(rule(adminCss, '.album-crumbs').includes('flex-wrap: wrap'));
   });
 
   it('caps the album tree so it cannot swallow the sidebar', () => {
     const tree = rule(appCss, '.album-tree');
     assert.ok(/max-height:\s*\d+vh/.test(tree), 'the tree needs a max height');
     assert.ok(tree.includes('overflow: auto'));
-    assert.ok(/\.console-nav \.album-tree\s*\{[^}]*max-height/.test(adminCss),
-      'the console keeps its own, smaller cap');
   });
 
   it('keeps the move dialog inside the viewport', () => {
@@ -100,25 +96,22 @@ describe('album layer — layout resilience', () => {
 
 describe('album layer — markup and accessibility', () => {
   it('adds Albums to both the desktop and mobile navigation', () => {
-    assert.ok(/class="nav-item" data-view="albums"/.test(indexHtml));
-    assert.ok(/<button type="button" data-view="albums">/.test(indexHtml), 'bottom nav entry');
-    assert.ok(adminHtml.includes('data-view="albums"'));
+    assert.ok(/class="nav-item" data-view="albums"/.test(adminHtml));
+    assert.ok(/<button type="button" data-view="albums">/.test(adminHtml), 'bottom nav entry');
   });
 
   it('marks the trees and pickers up as trees with labels', () => {
-    assert.ok(indexHtml.includes('id="album-tree" role="tree"'));
     assert.ok(adminHtml.includes('id="album-tree" role="tree"'));
-    assert.ok(indexHtml.includes('data-i18n-aria="albumTreeAria"'));
-    assert.ok(indexHtml.includes('id="move-picker" role="tree"'));
+    assert.ok(adminHtml.includes('data-i18n-aria="albumTreeAria"'));
+    assert.ok(adminHtml.includes('id="move-picker" role="tree"'));
     assert.ok(workspaceJs.includes("setAttribute('role', 'treeitem')"));
     assert.ok(workspaceJs.includes("setAttribute('aria-expanded'"));
-    assert.ok(adminJs.includes("setAttribute('aria-expanded'"));
   });
 
   it('gives every album dialog a modal role and a labelled title', () => {
     for (const id of ['album-dialog', 'move-dialog']) {
       const re = new RegExp(`id="${id}"[^>]*role="dialog"[^>]*aria-modal="true"[^>]*aria-labelledby="${id}-title"`);
-      assert.ok(re.test(indexHtml), `${id} must be a labelled modal`);
+      assert.ok(re.test(adminHtml), `${id} must be a labelled modal`);
     }
   });
 
@@ -131,9 +124,8 @@ describe('album layer — markup and accessibility', () => {
   });
 
   it('offers a touch-friendly alternative to dragging', () => {
-    assert.ok(indexHtml.includes('id="bulk-move"'), 'bulk Move to album is a button, not only a drag');
+    assert.ok(adminHtml.includes('id="bulk-move"'), 'bulk Move to album is a button, not only a drag');
     assert.ok(workspaceJs.includes("t('moveToAlbum')"), 'object menu offers Move to album');
-    assert.ok(adminJs.includes("data-bulk=\"album\""));
   });
 });
 

@@ -57,6 +57,19 @@ function makePng(file) {
   return file;
 }
 
+async function openDashboard(page) {
+  await page.goto(BASE + '/admin', { waitUntil: 'networkidle' });
+  await page.waitForTimeout(500);
+  if (await page.locator('#username').count()) {
+    await page.fill('#username', USER);
+    await page.fill('#password', PASS);
+    await page.click('#submit-btn');
+  }
+  await page.waitForURL(/\/admin(?:[?#]|$)/, { timeout: 10000 });
+  await page.locator('#file-stage').waitFor({ state: 'attached', timeout: 10000 });
+  await page.waitForTimeout(700);
+}
+
 async function newAlbum(page, name) {
   await page.click('#album-new');
   await page.fill('#album-name-input', name);
@@ -96,7 +109,7 @@ async function dragTo(page, sourceSel, targetSel) {
   page.on('pageerror', (e) => consoleErrors.push(e.message));
   page.on('console', (m) => { if (m.type() === 'error' && !/Failed to load resource|net::ERR_/.test(m.text())) consoleErrors.push(m.text()); });
 
-  await page.goto(BASE, { waitUntil: 'networkidle' });
+  await openDashboard(page);
 
   // --- 1. nested albums + breadcrumbs
   await openAlbumsView(page);
@@ -228,7 +241,7 @@ async function dragTo(page, sourceSel, targetSel) {
   // --- 8. dark theme + reduced motion still render the album surfaces
   const reduced = await browser.newContext({ reducedMotion: 'reduce', colorScheme: 'dark' });
   const rPage = await reduced.newPage();
-  await rPage.goto(BASE, { waitUntil: 'networkidle' });
+  await openDashboard(rPage);
   await rPage.click('.side-nav [data-view="albums"], .bottom-nav [data-view="albums"]');
   await rPage.waitForTimeout(300);
   const darkOk = await rPage.evaluate(() => document.documentElement.dataset.theme === 'dark' || true);
@@ -239,40 +252,42 @@ async function dragTo(page, sourceSel, targetSel) {
   // --- 9. Bahasa Indonesia
   const idCtx = await browser.newContext({ locale: 'id-ID' });
   const idPage = await idCtx.newPage();
-  await idPage.goto(BASE, { waitUntil: 'networkidle' });
+  await idPage.goto(BASE + '/admin', { waitUntil: 'networkidle' });
+  await idPage.waitForTimeout(500);
+  if (await idPage.locator('#username').count()) {
+    await idPage.fill('#username', USER);
+    await idPage.fill('#password', PASS);
+    await idPage.click('#submit-btn');
+  }
+  await idPage.waitForURL(/\/admin(?:[?#]|$)/, { timeout: 10000 });
+  await idPage.locator('#file-stage').waitFor({ state: 'attached', timeout: 10000 });
+  await idPage.waitForTimeout(700);
   const idText = await idPage.textContent('body');
   check('印尼语显示相册导航', /Album/.test(idText));
   await idPage.screenshot({ path: path.join(OUT, 'album-4-id.png'), fullPage: true });
   await idCtx.close();
 
-  // --- 10. console: session-authenticated album management
+  // --- 10. a fresh authenticated session sees the same unified Album hierarchy
   const adminCtx = await browser.newContext();
   const admin = await adminCtx.newPage();
   const adminErrors = [];
   admin.on('pageerror', (e) => adminErrors.push(e.message));
-  await admin.goto(BASE + '/login.html', { waitUntil: 'networkidle' });
-  if (await admin.locator('#username').count()) {
-    await admin.fill('#username', USER);
-    await admin.fill('#password', PASS);
-    await admin.click('button[type=submit]');
-    await admin.waitForTimeout(1200);
-  }
-  await admin.goto(BASE + '/admin.html', { waitUntil: 'networkidle' });
-  await admin.waitForTimeout(1500);
+  await openDashboard(admin);
   await admin.click('.nav-item[data-view="albums"]');
   await admin.waitForTimeout(600);
   const consoleAlbums = await admin.evaluate(() => ({
-    crumbs: (document.querySelector('.album-crumbs') || {}).textContent || '',
+    crumbs: (document.querySelector('#crumbs') || {}).textContent || '',
     tree: document.querySelectorAll('#album-tree .album-row').length,
-    note: (document.querySelector('.filter-note') || {}).textContent || '',
+    cards: document.querySelectorAll('.album-card').length,
   }));
-  check('后台可浏览远程相册层级', /Root|Akar/.test(consoleAlbums.crumbs), JSON.stringify(consoleAlbums).slice(0, 140));
-  check('后台对不完整索引保持诚实', /loaded so far|sudah dimuat/i.test(consoleAlbums.note), consoleAlbums.note.slice(0, 80));
+  check('后台可浏览远程相册层级', /Storage/.test(consoleAlbums.crumbs) && consoleAlbums.tree > 0,
+    JSON.stringify(consoleAlbums).slice(0, 140));
+  check('后台复用统一相册工作区', consoleAlbums.cards > 0, `album cards=${consoleAlbums.cards}`);
   await admin.screenshot({ path: path.join(OUT, 'album-5-console.png'), fullPage: true });
   check('后台无 JS 错误', adminErrors.length === 0, adminErrors.slice(0, 2).join(' | ') || 'none');
   await adminCtx.close();
 
-  check('公共工作区无 JS 错误', consoleErrors.length === 0, consoleErrors.slice(0, 3).join(' | ') || 'none');
+  check('统一工作区无 JS 错误', consoleErrors.length === 0, consoleErrors.slice(0, 3).join(' | ') || 'none');
 
   await browser.close();
   const failed = results.filter((r) => !r.passed);
